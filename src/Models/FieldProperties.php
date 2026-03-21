@@ -38,10 +38,10 @@ class FieldProperties extends AbstractModel
         $props->width = (float) ($data['w'] ?? 0);
         $props->height = (float) ($data['h'] ?? 0);
         $props->required = (bool) ($data['required'] ?? false);
-        $props->label = $data['label'] ?? null;
-        $props->fontFamily = $data['fontFamily'] ?? null;
-        $props->defaultValue = $data['defaultValue'] ?? null;
-        $props->options = $data['options'] ?? null;
+        $props->label = is_string($data['label'] ?? null) ? $data['label'] : null;
+        $props->fontFamily = is_string($data['fontFamily'] ?? null) ? $data['fontFamily'] : null;
+        $props->defaultValue = is_string($data['defaultValue'] ?? null) ? $data['defaultValue'] : null;
+        $props->options = is_array($data['options'] ?? null) ? $data['options'] : null;
 
         return $props;
     }
