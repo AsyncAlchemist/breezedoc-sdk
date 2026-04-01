@@ -1,6 +1,6 @@
 # Breezedoc PHP SDK
 
-An unofficial PHP SDK for the [Breezedoc](https://breezedoc.com) e-signature API.
+An unofficial PHP SDK for the [Breezedoc](https://breezedoc.com) e-signature API. [Official Breezedoc API Documentation](https://breezedoc.com/developer/docs/)
 
 ## Requirements
 
@@ -102,6 +102,13 @@ $document = $client->documents()->send(123, [
 
 // List document recipients
 $recipients = $client->documents()->recipients(123);
+
+// Download page images (returns array of JPEG binary strings)
+$images = $client->documents()->downloadPageImages(123);
+
+// Download page images and save to a directory
+$paths = $client->documents()->downloadPageImagesTo(123, '/path/to/output', 'contract');
+// Saves: contract-1.jpg, contract-2.jpg, ...
 ```
 
 ### Templates

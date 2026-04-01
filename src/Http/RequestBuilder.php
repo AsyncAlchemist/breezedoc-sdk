@@ -58,6 +58,16 @@ class RequestBuilder
     }
 
     /**
+     * Build a PSR-7 request for an external URL (no API base URL or auth).
+     *
+     * Used for fetching resources like pre-signed S3 URLs returned by the API.
+     */
+    public function buildExternalRequest(string $method, string $url): RequestInterface
+    {
+        return $this->requestFactory->createRequest($method, $url);
+    }
+
+    /**
      * Build the full URL for an API endpoint.
      *
      * @param array<string, mixed> $query

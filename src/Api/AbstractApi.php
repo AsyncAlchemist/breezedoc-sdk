@@ -99,6 +99,27 @@ abstract class AbstractApi
     }
 
     /**
+     * Fetch a resource from an external URL (e.g. a pre-signed S3 URL).
+     *
+     * @throws \RuntimeException If the request fails
+     */
+    protected function fetchExternalUrl(string $url): string
+    {
+        $request = $this->requestBuilder->buildExternalRequest('GET', $url);
+        $response = $this->httpClient->sendRequest($request);
+
+        $statusCode = $response->getStatusCode();
+
+        if ($statusCode >= 200 && $statusCode < 300) {
+            return (string) $response->getBody();
+        }
+
+        throw new \RuntimeException(
+            'Failed to fetch URL (HTTP ' . $statusCode . '): ' . $url
+        );
+    }
+
+    /**
      * Handle the HTTP response.
      *
      * @return array<string, mixed>

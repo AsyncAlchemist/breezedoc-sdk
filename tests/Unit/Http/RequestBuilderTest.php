@@ -155,4 +155,21 @@ class RequestBuilderTest extends UnitTestCase
         $request = $this->builder->build('GET', 'documents');
         $this->assertSame('https://breezedoc.com/api/documents', (string) $request->getUri());
     }
+
+    public function testBuildExternalRequestUsesFullUrl(): void
+    {
+        $request = $this->builder->buildExternalRequest('GET', 'https://s3.amazonaws.com/bucket/file.jpg');
+
+        $this->assertSame('GET', $request->getMethod());
+        $this->assertSame('https://s3.amazonaws.com/bucket/file.jpg', (string) $request->getUri());
+    }
+
+    public function testBuildExternalRequestHasNoAuthHeaders(): void
+    {
+        $request = $this->builder->buildExternalRequest('GET', 'https://s3.amazonaws.com/bucket/file.jpg');
+
+        $this->assertFalse($request->hasHeader('Authorization'));
+        $this->assertFalse($request->hasHeader('Accept'));
+        $this->assertFalse($request->hasHeader('Content-Type'));
+    }
 }

@@ -144,4 +144,125 @@ class DocumentsTest extends UnitTestCase
         $this->assertInstanceOf(PaginatedResult::class, $result);
         $this->assertInstanceOf(Recipient::class, $result->getItems()[0]);
     }
+
+    public function testDownloadPageImagesReturnsImageData(): void
+    {
+        // First response: find() call to get the document
+        $this->httpClient->addResponse($this->createJsonResponse([
+            'id' => 123,
+            'title' => 'Test Doc',
+            'slug' => 'test123',
+            'created_at' => '2025-01-01T00:00:00Z',
+            'updated_at' => '2025-01-01T00:00:00Z',
+            'document_files' => [
+                [
+                    'id' => 200,
+                    'document_file_pages' => [
+                        ['id' => 1, 'page' => 1, 'url' => 'https://s3.example.com/page1.jpg'],
+                        ['id' => 2, 'page' => 2, 'url' => 'https://s3.example.com/page2.jpg'],
+                    ],
+                ],
+            ],
+        ]));
+
+        // Second/third responses: page image fetches
+        $page1Data = 'fake-jpeg-page-1';
+        $page2Data = 'fake-jpeg-page-2';
+        $this->httpClient->addResponse(
+            $this->psr17Factory->createResponse(200)
+                ->withBody($this->psr17Factory->createStream($page1Data))
+        );
+        $this->httpClient->addResponse(
+            $this->psr17Factory->createResponse(200)
+                ->withBody($this->psr17Factory->createStream($page2Data))
+        );
+
+        $images = $this->documents->downloadPageImages(123);
+
+        $this->assertCount(2, $images);
+        $this->assertSame($page1Data, $images[0]);
+        $this->assertSame($page2Data, $images[1]);
+
+        // Verify the S3 requests have no auth headers
+        $requests = $this->httpClient->getRequests();
+        $this->assertFalse($requests[1]->hasHeader('Authorization'));
+        $this->assertFalse($requests[2]->hasHeader('Authorization'));
+    }
+
+    public function testDownloadPageImagesEmptyWhenNoFiles(): void
+    {
+        $this->httpClient->addResponse($this->createJsonResponse([
+            'id' => 123,
+            'title' => 'Test Doc',
+            'slug' => 'test123',
+            'created_at' => '2025-01-01T00:00:00Z',
+            'updated_at' => '2025-01-01T00:00:00Z',
+            'document_files' => [],
+        ]));
+
+        $images = $this->documents->downloadPageImages(123);
+
+        $this->assertSame([], $images);
+    }
+
+    public function testDownloadPageImagesToSavesFiles(): void
+    {
+        $this->httpClient->addResponse($this->createJsonResponse([
+            'id' => 123,
+            'title' => 'Test Doc',
+            'slug' => 'test123',
+            'created_at' => '2025-01-01T00:00:00Z',
+            'updated_at' => '2025-01-01T00:00:00Z',
+            'document_files' => [
+                [
+                    'id' => 200,
+                    'document_file_pages' => [
+                        ['id' => 1, 'page' => 1, 'url' => 'https://s3.example.com/page1.jpg'],
+                    ],
+                ],
+            ],
+        ]));
+
+        $pageData = 'fake-jpeg-data';
+        $this->httpClient->addResponse(
+            $this->psr17Factory->createResponse(200)
+                ->withBody($this->psr17Factory->createStream($pageData))
+        );
+
+        $dir = sys_get_temp_dir() . '/breezedoc_test_' . uniqid();
+        mkdir($dir);
+
+        try {
+            $paths = $this->documents->downloadPageImagesTo(123, $dir, 'contract');
+
+            $this->assertCount(1, $paths);
+            $this->assertStringEndsWith('contract-1.jpg', $paths[0]);
+            $this->assertFileExists($paths[0]);
+            $this->assertSame($pageData, file_get_contents($paths[0]));
+        } finally {
+            array_map('unlink', glob($dir . '/*') ?: []);
+            if (is_dir($dir)) {
+                rmdir($dir);
+            }
+        }
+    }
+
+    public function testDownloadPageImagesThrowsNotFound(): void
+    {
+        $this->httpClient->addResponse(
+            $this->createErrorResponse('Document not found', 404)
+        );
+
+        $this->expectException(\Breezedoc\Exceptions\NotFoundException::class);
+
+        $this->documents->downloadPageImages(999);
+    }
+
+    public function testDownloadPageImagesToThrowsForBadDirectory(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Directory is not writable');
+
+        $this->documents->downloadPageImagesTo(123, '/nonexistent/path');
+    }
 }

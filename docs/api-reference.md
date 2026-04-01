@@ -180,6 +180,24 @@ Send a document to recipients for signing.
 
 Recipients must match the number of recipients on the document, in ascending party order.
 
+### Downloading Page Images
+
+The Breezedoc API does not provide a direct PDF download endpoint. Instead, each document's pages are available as JPEG images via pre-signed S3 URLs returned in the `document_file_pages` array.
+
+The SDK provides two convenience methods for downloading these images:
+
+```php
+// Get page images as binary strings
+$images = $client->documents()->downloadPageImages($documentId);
+// $images[0] = JPEG binary of page 1, etc.
+
+// Save page images to a directory
+$paths = $client->documents()->downloadPageImagesTo($documentId, '/path/to/dir', 'contract');
+// Saves: /path/to/dir/contract-1.jpg, /path/to/dir/contract-2.jpg, ...
+```
+
+> **Note:** The pre-signed S3 URLs expire after 30 minutes. These methods fetch the document and download images in a single call, so expiry is not a concern during normal use.
+
 ---
 
 ### Field Types
