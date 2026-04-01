@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Documents::downloadPageImages(int $id)` downloads all page images as JPEG binary strings
+- `Documents::downloadPageImagesTo(int $id, string $directory, string $basename)` downloads page images and saves them to a directory
+- `AbstractApi::fetchExternalUrl()` for fetching resources from external URLs (e.g. pre-signed S3 URLs)
+- `RequestBuilder::buildExternalRequest()` for building PSR-7 requests without API auth headers
 - `SubmittedField` model for convenient access to submitted field data
 - `Document::getSubmittedFields()` returns all submitted fields across all recipients
 - `Document::getSubmittedField(string $name)` looks up a submitted field by name
