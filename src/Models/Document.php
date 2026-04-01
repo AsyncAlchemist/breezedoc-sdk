@@ -35,6 +35,11 @@ class Document extends AbstractModel
     private array $recipients = [];
 
     /**
+     * @var array<SubmittedField>|null
+     */
+    private ?array $submittedFields = null;
+
+    /**
      * @param array<string, mixed> $data
      */
     public static function fromArray(array $data): self
@@ -133,5 +138,74 @@ class Document extends AbstractModel
     public function getRecipients(): array
     {
         return $this->recipients;
+    }
+
+    /**
+     * Get all submitted field data across all recipients.
+     *
+     * Returns fields that have been submitted by recipients, combining
+     * the field definition, submitted value, and recipient context.
+     *
+     * @return array<SubmittedField>
+     */
+    public function getSubmittedFields(): array
+    {
+        if ($this->submittedFields !== null) {
+            return $this->submittedFields;
+        }
+
+        $recipientMap = [];
+        foreach ($this->recipients as $recipient) {
+            $recipientMap[$recipient->getId()] = $recipient;
+        }
+
+        $this->submittedFields = [];
+
+        foreach ($this->fields as $field) {
+            if ($field->isSubmitted() && $field->getRecipientId() !== null) {
+                $recipient = $recipientMap[$field->getRecipientId()] ?? null;
+                if ($recipient !== null) {
+                    $this->submittedFields[] = SubmittedField::create($field, $recipient);
+                }
+            }
+        }
+
+        return $this->submittedFields;
+    }
+
+    /**
+     * Get a submitted field by its field name.
+     *
+     * Returns the first matching field across all recipients. If the document
+     * has multiple fields with the same name (e.g., for different parties),
+     * use getSubmittedFields() and filter manually.
+     */
+    public function getSubmittedField(string $name): ?SubmittedField
+    {
+        foreach ($this->getSubmittedFields() as $submittedField) {
+            if ($submittedField->getName() === $name) {
+                return $submittedField;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Get submitted fields for a specific recipient.
+     *
+     * @return array<SubmittedField>
+     */
+    public function getSubmittedFieldsFor(Recipient $recipient): array
+    {
+        $result = [];
+
+        foreach ($this->getSubmittedFields() as $submittedField) {
+            if ($submittedField->getRecipientId() === $recipient->getId()) {
+                $result[] = $submittedField;
+            }
+        }
+
+        return $result;
     }
 }

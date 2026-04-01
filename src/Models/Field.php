@@ -19,6 +19,7 @@ class Field extends AbstractModel
     private string $name;
     private ?int $recipientId;
     private FieldProperties $properties;
+    private ?RecipientField $recipientField;
 
     /**
      * @param array<string, mixed> $data
@@ -36,6 +37,9 @@ class Field extends AbstractModel
         $field->name = (string) $data['name'];
         $field->recipientId = isset($data['recipient_id']) ? (int) $data['recipient_id'] : null;
         $field->properties = FieldProperties::fromArray($data['properties'] ?? []);
+        $field->recipientField = isset($data['recipient_field']) && is_array($data['recipient_field'])
+            ? RecipientField::fromArray($data['recipient_field'])
+            : null;
 
         return $field;
     }
@@ -101,5 +105,21 @@ class Field extends AbstractModel
     public function isRequired(): bool
     {
         return $this->properties->isRequired();
+    }
+
+    /**
+     * Get the recipient's submitted data for this field, if available.
+     */
+    public function getRecipientField(): ?RecipientField
+    {
+        return $this->recipientField;
+    }
+
+    /**
+     * Whether this field has been submitted by a recipient.
+     */
+    public function isSubmitted(): bool
+    {
+        return $this->recipientField !== null;
     }
 }

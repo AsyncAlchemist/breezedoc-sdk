@@ -12,19 +12,16 @@ use DateTimeImmutable;
 class Recipient extends AbstractModel
 {
     private int $id;
-    private string $slug;
+    private ?string $slug;
     private string $name;
     private string $email;
     private int $party;
     private bool $owner;
+    private ?DateTimeImmutable $sentAt;
+    private ?DateTimeImmutable $openedAt;
     private ?DateTimeImmutable $createdAt;
     private ?DateTimeImmutable $updatedAt;
     private ?DateTimeImmutable $completedAt;
-
-    /**
-     * @var array<RecipientField>
-     */
-    private array $fields = [];
 
     /**
      * @param array<string, mixed> $data
@@ -35,20 +32,16 @@ class Recipient extends AbstractModel
         $recipient->rawData = $data;
 
         $recipient->id = (int) $data['id'];
-        $recipient->slug = (string) $data['slug'];
+        $recipient->slug = isset($data['slug']) ? (string) $data['slug'] : null;
         $recipient->name = (string) $data['name'];
         $recipient->email = (string) $data['email'];
         $recipient->party = (int) $data['party'];
         $recipient->owner = (bool) ($data['owner'] ?? false);
+        $recipient->sentAt = self::parseDateTime($data['sent_at'] ?? null);
+        $recipient->openedAt = self::parseDateTime($data['opened_at'] ?? null);
         $recipient->createdAt = self::parseDateTime($data['created_at'] ?? null);
         $recipient->updatedAt = self::parseDateTime($data['updated_at'] ?? null);
         $recipient->completedAt = self::parseDateTime($data['completed_at'] ?? null);
-
-        if (isset($data['fields']) && is_array($data['fields'])) {
-            foreach ($data['fields'] as $fieldData) {
-                $recipient->fields[] = RecipientField::fromArray($fieldData);
-            }
-        }
 
         return $recipient;
     }
@@ -58,7 +51,7 @@ class Recipient extends AbstractModel
         return $this->id;
     }
 
-    public function getSlug(): string
+    public function getSlug(): ?string
     {
         return $this->slug;
     }
@@ -83,6 +76,26 @@ class Recipient extends AbstractModel
         return $this->owner;
     }
 
+    public function getSentAt(): ?DateTimeImmutable
+    {
+        return $this->sentAt;
+    }
+
+    public function isSent(): bool
+    {
+        return $this->sentAt !== null;
+    }
+
+    public function getOpenedAt(): ?DateTimeImmutable
+    {
+        return $this->openedAt;
+    }
+
+    public function isOpened(): bool
+    {
+        return $this->openedAt !== null;
+    }
+
     public function getCreatedAt(): ?DateTimeImmutable
     {
         return $this->createdAt;
@@ -101,13 +114,5 @@ class Recipient extends AbstractModel
     public function isCompleted(): bool
     {
         return $this->completedAt !== null;
-    }
-
-    /**
-     * @return array<RecipientField>
-     */
-    public function getFields(): array
-    {
-        return $this->fields;
     }
 }

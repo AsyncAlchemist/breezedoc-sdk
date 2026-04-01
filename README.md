@@ -292,6 +292,91 @@ if ($field->isSignature()) {
 echo FieldType::getName(FieldType::SIGNATURE); // "Signature"
 ```
 
+## Working with Submitted Field Data
+
+After a document has been signed, you can retrieve the data that recipients entered — text values, dates, signatures, checkboxes, and more.
+
+### Retrieving a Specific Field by Label
+
+When you know the field labels on your document (e.g., you created it from a known template), you can look up submitted values by iterating and matching:
+
+```php
+$document = $client->documents()->find(123);
+
+// Look up by field label
+foreach ($document->getSubmittedFields() as $field) {
+    if ($field->getLabel() === 'First and Last Name') {
+        echo $field->getValue(); // "Alexander Bojer"
+    }
+}
+
+// Or use getSubmittedField() to find by field name
+$signature = $document->getSubmittedField('Signature');
+if ($signature !== null) {
+    echo $signature->getImage();      // "signatures/abc123.png"
+    echo $signature->isSignature();   // true
+}
+```
+
+### Iterating All Submitted Fields
+
+When you don't know the field structure ahead of time, iterate all submitted data:
+
+```php
+$document = $client->documents()->find(123);
+
+foreach ($document->getSubmittedFields() as $field) {
+    $label = $field->getLabel() ?? $field->getName();
+    $type  = $field->getFieldTypeName(); // "Text", "Signature", "Date", "Checkbox", etc.
+
+    if ($field->isSignature()) {
+        echo "{$label}: signed (image: {$field->getImage()})\n";
+    } elseif ($field->isChecked()) {
+        echo "{$label}: checked\n";
+    } else {
+        echo "{$label}: {$field->getValue()}\n";
+    }
+}
+```
+
+### Type-Specific Accessors
+
+Each field type stores its value differently. `getValue()` returns a normalized string for any type, but you can also use type-specific methods:
+
+```php
+$field->getValue();     // Normalized string for any field type
+$field->getText();      // Text/email/dropdown value
+$field->getDate();      // Date string (e.g., "03-31-2026")
+$field->isChecked();    // Checkbox boolean
+$field->getImage();     // Signature/initials image path
+```
+
+### Per-Recipient Fields
+
+For multi-signer documents, get submitted fields for a specific recipient:
+
+```php
+foreach ($document->getRecipients() as $recipient) {
+    echo $recipient->getName() . ":\n";
+
+    foreach ($document->getSubmittedFieldsFor($recipient) as $field) {
+        $label = $field->getLabel() ?? $field->getName();
+        echo "  {$label}: {$field->getValue()}\n";
+    }
+}
+```
+
+### Underlying Objects
+
+Each `SubmittedField` provides access to the raw objects if you need full details:
+
+```php
+$field->getField();          // The Field definition (position, properties, type, etc.)
+$field->getRecipientField(); // The raw RecipientField (submitted properties)
+$field->getRecipient();      // The full Recipient object
+```
+
+
 ## Important Limitations
 
 ### No File Upload via API

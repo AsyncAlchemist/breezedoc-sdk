@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Breezedoc\Tests\Unit\Models;
 
+use Breezedoc\Config\FieldType;
 use Breezedoc\Models\Document;
 use Breezedoc\Models\DocumentFile;
 use Breezedoc\Models\Field;
 use Breezedoc\Models\Recipient;
+use Breezedoc\Models\SubmittedField;
 use Breezedoc\Tests\Unit\UnitTestCase;
 use DateTimeImmutable;
 
@@ -185,5 +187,164 @@ class DocumentTest extends UnitTestCase
         $this->assertSame([], $document->getDocumentFiles());
         $this->assertSame([], $document->getFields());
         $this->assertSame([], $document->getRecipients());
+    }
+
+    public function testGetSubmittedFields(): void
+    {
+        $document = Document::fromArray($this->buildCompletedDocumentData());
+        $submitted = $document->getSubmittedFields();
+
+        $this->assertCount(3, $submitted);
+        $this->assertContainsOnlyInstancesOf(SubmittedField::class, $submitted);
+
+        $this->assertSame('Text', $submitted[0]->getName());
+        $this->assertSame('Acme Corp', $submitted[0]->getValue());
+        $this->assertSame('John Doe', $submitted[0]->getRecipientName());
+
+        $this->assertSame('Signature', $submitted[1]->getName());
+        $this->assertSame('signatures/sig1.png', $submitted[1]->getImage());
+
+        $this->assertSame('Signature', $submitted[2]->getName());
+        $this->assertSame('signatures/sig2.png', $submitted[2]->getImage());
+        $this->assertSame('Jane Smith', $submitted[2]->getRecipientName());
+    }
+
+    public function testGetSubmittedFieldByName(): void
+    {
+        $document = Document::fromArray($this->buildCompletedDocumentData());
+
+        $field = $document->getSubmittedField('Text');
+
+        $this->assertNotNull($field);
+        $this->assertSame('Acme Corp', $field->getValue());
+        $this->assertSame('Text', $field->getFieldTypeName());
+    }
+
+    public function testGetSubmittedFieldByNameReturnsNull(): void
+    {
+        $document = Document::fromArray($this->buildCompletedDocumentData());
+
+        $this->assertNull($document->getSubmittedField('Nonexistent Field'));
+    }
+
+    public function testGetSubmittedFieldsForRecipient(): void
+    {
+        $document = Document::fromArray($this->buildCompletedDocumentData());
+        $recipients = $document->getRecipients();
+
+        $johnsFields = $document->getSubmittedFieldsFor($recipients[0]);
+        $this->assertCount(2, $johnsFields);
+        $this->assertSame('Text', $johnsFields[0]->getName());
+        $this->assertSame('Signature', $johnsFields[1]->getName());
+
+        $janesFields = $document->getSubmittedFieldsFor($recipients[1]);
+        $this->assertCount(1, $janesFields);
+        $this->assertSame('Signature', $janesFields[0]->getName());
+    }
+
+    public function testGetSubmittedFieldsEmpty(): void
+    {
+        $document = Document::fromArray($this->sampleData);
+
+        $this->assertSame([], $document->getSubmittedFields());
+    }
+
+    public function testGetSubmittedFieldsIsCached(): void
+    {
+        $document = Document::fromArray($this->buildCompletedDocumentData());
+
+        $first = $document->getSubmittedFields();
+        $second = $document->getSubmittedFields();
+
+        $this->assertSame($first, $second);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildCompletedDocumentData(): array
+    {
+        return [
+            'id' => 100,
+            'title' => 'Test Agreement',
+            'slug' => 'abc123',
+            'redirect_url' => null,
+            'created_at' => '2025-01-15T10:30:00.000000Z',
+            'updated_at' => '2025-01-15T12:00:00.000000Z',
+            'completed_at' => '2025-01-15T14:00:00.000000Z',
+            'document_files' => [],
+            'fields' => [
+                [
+                    'id' => 300,
+                    'document_file_id' => 200,
+                    'page' => 1,
+                    'party' => 1,
+                    'field_type_id' => FieldType::TEXT,
+                    'name' => 'Text',
+                    'recipient_id' => 400,
+                    'properties' => ['h' => 0.035, 'w' => 0.3, 'x' => 0.1, 'y' => 0.5, 'required' => true, 'label' => 'Company Name'],
+                    'recipient_field' => [
+                        'field_id' => 300,
+                        'properties' => ['text' => 'Acme Corp', 'committed' => true],
+                    ],
+                ],
+                [
+                    'id' => 301,
+                    'document_file_id' => 200,
+                    'page' => 1,
+                    'party' => 1,
+                    'field_type_id' => FieldType::SIGNATURE,
+                    'name' => 'Signature',
+                    'recipient_id' => 400,
+                    'properties' => ['h' => 0.035, 'w' => 0.217, 'x' => 0.149, 'y' => 0.724, 'required' => true],
+                    'recipient_field' => [
+                        'field_id' => 301,
+                        'properties' => ['text' => 'John Doe', 'fontFamily' => 'MonteCarlo', 'committed' => true, 'image' => 'signatures/sig1.png'],
+                    ],
+                ],
+                [
+                    'id' => 302,
+                    'document_file_id' => 200,
+                    'page' => 1,
+                    'party' => 2,
+                    'field_type_id' => FieldType::SIGNATURE,
+                    'name' => 'Signature',
+                    'recipient_id' => 500,
+                    'properties' => ['h' => 0.035, 'w' => 0.217, 'x' => 0.149, 'y' => 0.85, 'required' => true],
+                    'recipient_field' => [
+                        'field_id' => 302,
+                        'properties' => ['text' => 'Jane Smith', 'fontFamily' => 'MonteCarlo', 'committed' => true, 'image' => 'signatures/sig2.png'],
+                    ],
+                ],
+            ],
+            'recipients' => [
+                [
+                    'id' => 400,
+                    'slug' => 'def456',
+                    'name' => 'John Doe',
+                    'email' => 'john@example.com',
+                    'party' => 1,
+                    'owner' => false,
+                    'sent_at' => '2025-01-15T10:00:00.000000Z',
+                    'opened_at' => null,
+                    'created_at' => '2025-01-15T10:30:00.000000Z',
+                    'updated_at' => '2025-01-15T11:00:00.000000Z',
+                    'completed_at' => '2025-01-15T11:00:00.000000Z',
+                ],
+                [
+                    'id' => 500,
+                    'slug' => 'ghi789',
+                    'name' => 'Jane Smith',
+                    'email' => 'jane@example.com',
+                    'party' => 2,
+                    'owner' => true,
+                    'sent_at' => '2025-01-15T12:00:00.000000Z',
+                    'opened_at' => null,
+                    'created_at' => '2025-01-15T10:30:00.000000Z',
+                    'updated_at' => '2025-01-15T14:00:00.000000Z',
+                    'completed_at' => '2025-01-15T14:00:00.000000Z',
+                ],
+            ],
+        ];
     }
 }
