@@ -68,9 +68,7 @@ class RateLimitHandler implements ClientInterface
         // Cap at 60 seconds
         $seconds = min($seconds, 60);
 
-        // For testing purposes, we don't actually sleep
-        // In production, you would: sleep($seconds);
-        usleep($seconds * 1000); // Sleep in milliseconds for faster tests
+        sleep($seconds);
     }
 
     /**
