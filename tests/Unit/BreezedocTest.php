@@ -26,4 +26,11 @@ class BreezedocTest extends UnitTestCase
 
         $this->assertInstanceOf(Client::class, $client);
     }
+
+    public function testGetVersionReturnsNonEmptyString(): void
+    {
+        $version = Breezedoc::getVersion();
+
+        $this->assertNotSame('', $version);
+    }
 }

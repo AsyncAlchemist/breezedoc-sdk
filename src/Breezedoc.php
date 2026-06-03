@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Breezedoc;
 
 use Breezedoc\Config\Configuration;
+use Composer\InstalledVersions;
 use Psr\Http\Client\ClientInterface;
 
 /**
@@ -34,5 +35,22 @@ class Breezedoc
     public static function client($config, ?ClientInterface $httpClient = null): Client
     {
         return new Client($config, $httpClient);
+    }
+
+    /**
+     * Get the installed SDK version.
+     *
+     * Reads from Composer's runtime version data so the version stays in sync
+     * with the installed package without a hand-maintained constant. Returns
+     * `"dev"` if the SDK is not running from a Composer-installed package
+     * (e.g. when running the SDK's own test suite from a checkout).
+     */
+    public static function getVersion(): string
+    {
+        try {
+            return InstalledVersions::getPrettyVersion('asyncalchemist/breezedoc-sdk') ?? 'dev';
+        } catch (\OutOfBoundsException $e) {
+            return 'dev';
+        }
     }
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Breezedoc\Tests\Unit\Http;
 
+use Breezedoc\Breezedoc;
 use Breezedoc\Config\Configuration;
 use Breezedoc\Http\RequestBuilder;
 use Breezedoc\Tests\Unit\UnitTestCase;
@@ -43,6 +44,14 @@ class RequestBuilderTest extends UnitTestCase
 
         $this->assertTrue($request->hasHeader('Accept'));
         $this->assertSame('application/json', $request->getHeaderLine('Accept'));
+    }
+
+    public function testBuildRequestWithUserAgentHeader(): void
+    {
+        $request = $this->builder->build('GET', '/documents');
+
+        $this->assertTrue($request->hasHeader('User-Agent'));
+        $this->assertSame('breezedoc-php-sdk/' . Breezedoc::getVersion(), $request->getHeaderLine('User-Agent'));
     }
 
     public function testBuildRequestWithContentTypeHeader(): void

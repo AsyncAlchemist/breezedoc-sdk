@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Breezedoc\Http;
 
+use Breezedoc\Breezedoc;
 use Breezedoc\Config\Configuration;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\RequestInterface;
@@ -43,6 +44,7 @@ class RequestBuilder
         $request = $this->requestFactory->createRequest($method, $url);
         $request = $request->withHeader('Authorization', 'Bearer ' . $this->config->getToken());
         $request = $request->withHeader('Accept', 'application/json');
+        $request = $request->withHeader('User-Agent', 'breezedoc-php-sdk/' . Breezedoc::getVersion());
 
         if ($body !== null) {
             $request = $request->withHeader('Content-Type', 'application/json');
