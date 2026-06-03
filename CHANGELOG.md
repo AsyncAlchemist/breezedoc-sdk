@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-03
+
+### Added
+
+- `Breezedoc::getVersion()` returns the installed SDK version, sourced from Composer's runtime version data (no hand-maintained constant to keep in sync)
+- API requests now send a `User-Agent: breezedoc-php-sdk/{version}` header so the BreezeDoc API can identify SDK client versions
+
+### Changed
+
+- **Breaking:** `RecipientField::getDate()` and `SubmittedField::getDate()` now return `?DateTimeImmutable` instead of `?string`, parsing the API's `m-d-Y` wire format. Previously callers had to know the format and were prone to the `strtotime()` footgun where dashed dates parse as `d-m-Y` and silently produce the wrong date (#12). `getValue()` continues to return the raw date string for callers that want the normalized stringly-typed accessor.
+- Bumped `guzzlehttp/guzzle` constraint to `7.10.4` (#10) and `phpstan/phpstan` dev constraint to `2.2.1` (#11)
+
 ## [0.2.1] - 2026-04-13
 
 ### Fixed
