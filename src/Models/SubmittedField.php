@@ -88,8 +88,12 @@ class SubmittedField
 
     /**
      * Get the date value (for date fields).
+     *
+     * The BreezeDoc API serializes date field values as `m-d-Y`. Returning a parsed
+     * value avoids the `strtotime()` footgun where dashed dates are interpreted
+     * as `d-m-Y` and produce the wrong date.
      */
-    public function getDate(): ?string
+    public function getDate(): ?\DateTimeImmutable
     {
         $rf = $this->field->getRecipientField();
 

@@ -61,10 +61,26 @@ class RecipientField extends AbstractModel
 
     /**
      * Get the date value (for date fields).
+     *
+     * The BreezeDoc API serializes date field values as `m-d-Y` (e.g. "06-03-2026").
+     * Returning a parsed value keeps callers from having to know the wire format —
+     * `strtotime()` on a dashed date string parses it as `d-m-Y` and silently
+     * produces the wrong date.
      */
-    public function getDate(): ?string
+    public function getDate(): ?\DateTimeImmutable
     {
-        return isset($this->properties['date']) ? (string) $this->properties['date'] : null;
+        if (!isset($this->properties['date'])) {
+            return null;
+        }
+
+        $raw = (string) $this->properties['date'];
+        if ($raw === '') {
+            return null;
+        }
+
+        $dt = \DateTimeImmutable::createFromFormat('!m-d-Y', $raw);
+
+        return $dt instanceof \DateTimeImmutable ? $dt : null;
     }
 
     /**

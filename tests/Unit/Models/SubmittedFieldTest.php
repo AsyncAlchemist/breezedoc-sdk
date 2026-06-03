@@ -148,8 +148,77 @@ class SubmittedFieldTest extends UnitTestCase
 
         $submitted = SubmittedField::create($dateField, $this->recipient);
 
-        $this->assertSame('03-31-2026', $submitted->getDate());
+        $date = $submitted->getDate();
+        $this->assertInstanceOf(\DateTimeImmutable::class, $date);
+        $this->assertSame('2026-03-31', $date->format('Y-m-d'));
+        $this->assertSame('00:00:00', $date->format('H:i:s'));
         $this->assertSame('03-31-2026', $submitted->getValue());
+    }
+
+    public function testDateFieldParsesAmericanFormatNotEuropean(): void
+    {
+        // Regression test for the strtotime footgun: "06-03-2026" must be parsed
+        // as June 3 (m-d-Y, what the API emits), not March 6 (d-m-Y, what
+        // strtotime would do with a dashed date).
+        $dateField = Field::fromArray([
+            'id' => 302,
+            'document_file_id' => 200,
+            'page' => 1,
+            'party' => 1,
+            'field_type_id' => FieldType::DATE,
+            'name' => 'Date',
+            'recipient_id' => 400,
+            'properties' => ['h' => 0.018, 'w' => 0.19, 'x' => 0.52, 'y' => 0.74, 'required' => false],
+            'recipient_field' => [
+                'field_id' => 302,
+                'properties' => ['date' => '06-03-2026'],
+            ],
+        ]);
+
+        $date = SubmittedField::create($dateField, $this->recipient)->getDate();
+
+        $this->assertInstanceOf(\DateTimeImmutable::class, $date);
+        $this->assertSame('2026-06-03', $date->format('Y-m-d'));
+    }
+
+    public function testDateFieldReturnsNullForInvalidDate(): void
+    {
+        $dateField = Field::fromArray([
+            'id' => 302,
+            'document_file_id' => 200,
+            'page' => 1,
+            'party' => 1,
+            'field_type_id' => FieldType::DATE,
+            'name' => 'Date',
+            'recipient_id' => 400,
+            'properties' => ['h' => 0.018, 'w' => 0.19, 'x' => 0.52, 'y' => 0.74, 'required' => false],
+            'recipient_field' => [
+                'field_id' => 302,
+                'properties' => ['date' => 'not-a-date'],
+            ],
+        ]);
+
+        $this->assertNull(SubmittedField::create($dateField, $this->recipient)->getDate());
+    }
+
+    public function testDateFieldReturnsNullWhenAbsent(): void
+    {
+        $dateField = Field::fromArray([
+            'id' => 302,
+            'document_file_id' => 200,
+            'page' => 1,
+            'party' => 1,
+            'field_type_id' => FieldType::DATE,
+            'name' => 'Date',
+            'recipient_id' => 400,
+            'properties' => ['h' => 0.018, 'w' => 0.19, 'x' => 0.52, 'y' => 0.74, 'required' => false],
+            'recipient_field' => [
+                'field_id' => 302,
+                'properties' => [],
+            ],
+        ]);
+
+        $this->assertNull(SubmittedField::create($dateField, $this->recipient)->getDate());
     }
 
     public function testCheckboxField(): void
