@@ -5,12 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-06-03
+
+### Changed
+
+- User-Agent header now clearly identifies this SDK as an unofficial, community-maintained package: `asyncalchemist/breezedoc-sdk/{version} (+https://github.com/AsyncAlchemist/breezedoc-sdk)`. The previous `breezedoc-php-sdk/{version}` form could be mistaken for an official BreezeDoc-published SDK.
+
 ## [0.3.0] - 2026-06-03
 
 ### Added
 
 - `Breezedoc::getVersion()` returns the installed SDK version, sourced from Composer's runtime version data (no hand-maintained constant to keep in sync)
-- API requests now send a `User-Agent: breezedoc-php-sdk/{version}` header so the BreezeDoc API can identify SDK client versions
+- API requests now send a `User-Agent` header identifying the SDK and version so the BreezeDoc API can identify which clients are in use
 
 ### Changed
 

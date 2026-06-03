@@ -44,7 +44,11 @@ class RequestBuilder
         $request = $this->requestFactory->createRequest($method, $url);
         $request = $request->withHeader('Authorization', 'Bearer ' . $this->config->getToken());
         $request = $request->withHeader('Accept', 'application/json');
-        $request = $request->withHeader('User-Agent', 'breezedoc-php-sdk/' . Breezedoc::getVersion());
+        $request = $request->withHeader(
+            'User-Agent',
+            'asyncalchemist/breezedoc-sdk/' . Breezedoc::getVersion()
+                . ' (+https://github.com/AsyncAlchemist/breezedoc-sdk)'
+        );
 
         if ($body !== null) {
             $request = $request->withHeader('Content-Type', 'application/json');

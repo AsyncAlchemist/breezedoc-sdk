@@ -51,7 +51,9 @@ class RequestBuilderTest extends UnitTestCase
         $request = $this->builder->build('GET', '/documents');
 
         $this->assertTrue($request->hasHeader('User-Agent'));
-        $this->assertSame('breezedoc-php-sdk/' . Breezedoc::getVersion(), $request->getHeaderLine('User-Agent'));
+        $expected = 'asyncalchemist/breezedoc-sdk/' . Breezedoc::getVersion()
+            . ' (+https://github.com/AsyncAlchemist/breezedoc-sdk)';
+        $this->assertSame($expected, $request->getHeaderLine('User-Agent'));
     }
 
     public function testBuildRequestWithContentTypeHeader(): void
