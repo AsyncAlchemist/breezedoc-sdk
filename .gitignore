@@ -3,6 +3,7 @@
 
 # Environment
 .env
+.envrc
 
 # PHPUnit
 .phpunit.cache/
@@ -24,3 +25,9 @@ Thumbs.db
 
 # Composer
 composer.lock
+
+# Claude Code
+.claude/
+
+# Local examples (not part of the published SDK)
+/examples/
