@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-07-23
+
+### Added
+
+- `Documents::downloadPdf(int $id)` and `Documents::downloadPdfTo(int $id, string $directory, ?string $filename)` download the signed/completed PDF of a document. The BreezeDoc REST API does not expose PDFs, so this authenticates against the BreezeDoc **website** with your web login and fetches the file the site's "Download" button serves.
+- `Configuration::setWebLogin(string $email, string $password)` configures the website credentials for the PDF download feature (distinct from the API token). Also `setSessionStore()`, `setWebSessionTtl()`, and `setWebBaseUrl()`.
+- `Breezedoc\Web\SessionStore` interface with `FileSessionStore` (default `~/.breezedoc/session.json`, written `0600`) and `ArraySessionStore`. The login session is cached long-term and reused across runs; expired sessions are detected and refreshed automatically (a stored session is only re-used if it belongs to the configured account and is within the TTL). The password is never persisted.
+
+### Changed
+
+- **`guzzlehttp/guzzle` promoted from `require-dev` to `require` (`7.15.1`).** It is now a runtime dependency used by the PDF download feature. This also clears the security advisories that affected the previous `7.10.4` pin (which broke `composer install`).
+
+### Notes
+
+- Login-based PDF download automates the BreezeDoc website login. It may be against BreezeDoc's Terms of Service and is inherently brittle — a change to their login page or bot protection can break it. Use with that understanding.
+
 ## [0.3.1] - 2026-06-03
 
 ### Changed

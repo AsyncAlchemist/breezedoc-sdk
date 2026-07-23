@@ -111,6 +111,47 @@ $paths = $client->documents()->downloadPageImagesTo(123, '/path/to/output', 'con
 // Saves: contract-1.jpg, contract-2.jpg, ...
 ```
 
+#### Downloading the signed PDF
+
+The BreezeDoc REST API does not expose document PDFs — only per-page JPEG images (above).
+To get the actual signed/completed PDF (with signatures and the audit certificate), the SDK
+can log into the BreezeDoc **website** with your web credentials and fetch the file the site's
+"Download" button serves.
+
+```php
+use Breezedoc\Breezedoc;
+use Breezedoc\Config\Configuration;
+
+$config = new Configuration('your-api-token');
+// Your breezedoc.com website email + password (NOT the API token):
+$config->setWebLogin('you@example.com', 'your-website-password');
+
+$client = Breezedoc::client($config);
+
+// Get the signed PDF as raw bytes:
+$pdf = $client->documents()->downloadPdf(123);
+
+// ...or save it to a directory (default filename: document-123.pdf):
+$path = $client->documents()->downloadPdfTo(123, '/path/to/output');
+```
+
+The website login session is cached to `~/.breezedoc/session.json` (written `0600`) and
+reused across runs, so you are not logged in on every call; an expired session is detected and
+refreshed automatically. Customize or relocate the cache:
+
+```php
+use Breezedoc\Web\FileSessionStore;
+
+$config->setSessionStore(new FileSessionStore('/secure/path/session.json'))
+       ->setWebSessionTtl(1800); // seconds a cached session is trusted before a proactive re-login
+```
+
+> **⚠️ Caveat.** This feature automates the BreezeDoc website login. It may be against
+> BreezeDoc's Terms of Service and is inherently brittle — a change to their login page or bot
+> protection can break it at any time. The cached session file is a live credential (treat it
+> like a password and keep it out of version control). Your password is never written to disk —
+> only the session cookies are cached.
+
 ### Templates
 
 ```php
@@ -409,6 +450,9 @@ composer test:unit
 
 # Run integration tests (requires API token)
 export BREEZEDOC_API_TOKEN="your-token"
+# Optional: also exercise the signed-PDF download flow
+export BREEZEDOC_WEB_EMAIL="you@example.com"
+export BREEZEDOC_WEB_PASSWORD="your-website-password"
 composer test:integration
 
 # Run all tests

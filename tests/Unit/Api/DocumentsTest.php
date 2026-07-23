@@ -11,6 +11,13 @@ use Breezedoc\Models\Document;
 use Breezedoc\Models\Recipient;
 use Breezedoc\Pagination\PaginatedResult;
 use Breezedoc\Tests\Unit\UnitTestCase;
+use Breezedoc\Web\ArraySessionStore;
+use Breezedoc\Web\SessionState;
+use Breezedoc\Web\WebSession;
+use GuzzleHttp\Client as GuzzleClient;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Psr7\Response as GuzzleResponse;
 use Http\Mock\Client as MockHttpClient;
 use Nyholm\Psr7\Factory\Psr17Factory;
 
@@ -264,5 +271,80 @@ class DocumentsTest extends UnitTestCase
         $this->expectExceptionMessage('Directory is not writable');
 
         $this->documents->downloadPageImagesTo(123, '/nonexistent/path');
+    }
+
+    public function testDownloadPdfThrowsWhenNoWebLoginConfigured(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Web login credentials are required');
+
+        // $this->documents was built without a WebSession.
+        $this->documents->downloadPdf(123);
+    }
+
+    public function testDownloadPdfToThrowsForBadDirectory(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Directory is not writable');
+
+        $this->documents->downloadPdfTo(123, '/nonexistent/path');
+    }
+
+    public function testDownloadPdfDelegatesToWebSession(): void
+    {
+        $documents = $this->documentsWithWebSession('%PDF-delegated');
+
+        $this->assertSame('%PDF-delegated', $documents->downloadPdf(311939));
+    }
+
+    public function testDownloadPdfToSavesFile(): void
+    {
+        $documents = $this->documentsWithWebSession('%PDF-saved');
+
+        $dir = sys_get_temp_dir() . '/breezedoc_pdf_test_' . uniqid();
+        mkdir($dir);
+
+        try {
+            $path = $documents->downloadPdfTo(311939, $dir);
+
+            $this->assertStringEndsWith('document-311939.pdf', $path);
+            $this->assertFileExists($path);
+            $this->assertSame('%PDF-saved', file_get_contents($path));
+        } finally {
+            array_map('unlink', glob($dir . '/*') ?: []);
+            rmdir($dir);
+        }
+    }
+
+    /**
+     * Build a Documents resource whose WebSession serves the given PDF body from a
+     * cached (valid) session, so no live login is attempted.
+     */
+    private function documentsWithWebSession(string $pdfBody): Documents
+    {
+        $store = new ArraySessionStore();
+        $store->save(new SessionState('user@example.com', time(), []));
+
+        $stack = HandlerStack::create(new MockHandler([
+            new GuzzleResponse(200, ['Content-Type' => 'application/pdf'], $pdfBody),
+        ]));
+        $guzzle = new GuzzleClient(['handler' => $stack]);
+
+        $webSession = new WebSession(
+            $guzzle,
+            $store,
+            'user@example.com',
+            'secret',
+            3600,
+            'https://breezedoc.com'
+        );
+
+        return new Documents($this->httpClient, $this->makeRequestBuilder(), $webSession);
+    }
+
+    private function makeRequestBuilder(): RequestBuilder
+    {
+        $factory = new Psr17Factory();
+        return new RequestBuilder(new Configuration('test-token'), $factory, $factory);
     }
 }

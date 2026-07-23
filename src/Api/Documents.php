@@ -4,16 +4,29 @@ declare(strict_types=1);
 
 namespace Breezedoc\Api;
 
+use Breezedoc\Http\RequestBuilder;
 use Breezedoc\Models\Document;
 use Breezedoc\Models\Recipient;
 use Breezedoc\Pagination\FormatAPaginator;
 use Breezedoc\Pagination\PaginatedResult;
+use Breezedoc\Web\WebSession;
+use Psr\Http\Client\ClientInterface;
 
 /**
  * Documents API resource.
  */
 class Documents extends AbstractApi
 {
+    private ?WebSession $webSession;
+
+    public function __construct(
+        ClientInterface $httpClient,
+        RequestBuilder $requestBuilder,
+        ?WebSession $webSession = null
+    ) {
+        parent::__construct($httpClient, $requestBuilder);
+        $this->webSession = $webSession;
+    }
     /**
      * List documents.
      *
@@ -144,6 +157,60 @@ class Documents extends AbstractApi
         }
 
         return $paths;
+    }
+
+    /**
+     * Download the signed/completed PDF for a document.
+     *
+     * This uses the Breezedoc website (not the REST API, which does not expose
+     * PDFs): it logs in with the web credentials configured via
+     * {@see \Breezedoc\Config\Configuration::setWebLogin()} and fetches the PDF the
+     * site's "Download" button serves. The login session is cached and reused.
+     *
+     * @return string Raw PDF bytes
+     * @throws \InvalidArgumentException If no web login has been configured
+     * @throws \Breezedoc\Exceptions\AuthenticationException If login fails
+     * @throws \Breezedoc\Exceptions\AuthorizationException If the account cannot access the document
+     * @throws \Breezedoc\Exceptions\NotFoundException If the document does not exist
+     */
+    public function downloadPdf(int $id): string
+    {
+        if ($this->webSession === null) {
+            throw new \InvalidArgumentException(
+                'Web login credentials are required to download PDFs. '
+                . 'Call Configuration::setWebLogin($email, $password).'
+            );
+        }
+
+        return $this->webSession->getPdf($id);
+    }
+
+    /**
+     * Download the signed/completed PDF for a document and save it to a directory.
+     *
+     * @param int $id Document ID
+     * @param string $directory Directory to save the PDF to
+     * @param string|null $filename File name to use (default: "document-{id}.pdf")
+     * @return string The saved file path
+     * @throws \InvalidArgumentException If no web login has been configured
+     * @throws \RuntimeException If the directory is not writable or the file cannot be saved
+     */
+    public function downloadPdfTo(int $id, string $directory, ?string $filename = null): string
+    {
+        if (!is_dir($directory) || !is_writable($directory)) {
+            throw new \RuntimeException('Directory is not writable: ' . $directory);
+        }
+
+        $pdf = $this->downloadPdf($id);
+
+        $filename = $filename ?? ('document-' . $id . '.pdf');
+        $filePath = rtrim($directory, '/') . '/' . $filename;
+
+        if (file_put_contents($filePath, $pdf) === false) {
+            throw new \RuntimeException('Failed to write PDF to: ' . $filePath);
+        }
+
+        return $filePath;
     }
 
     /**

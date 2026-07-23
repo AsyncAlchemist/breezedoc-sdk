@@ -91,4 +91,44 @@ abstract class IntegrationTestCase extends TestCase
             'Integration tests require BREEZEDOC_TEST_EMAIL environment variable to be set.'
         );
     }
+
+    /**
+     * Get the website login credentials for the PDF download feature.
+     *
+     * Skips the test if either variable is unset, matching the token/email helpers.
+     *
+     * @return array{email: string, password: string}
+     */
+    protected function getWebCredentials(): array
+    {
+        $email = $this->readEnv('BREEZEDOC_WEB_EMAIL');
+        $password = $this->readEnv('BREEZEDOC_WEB_PASSWORD');
+
+        if ($email === null || $password === null) {
+            $this->markTestSkipped(
+                'Web PDF integration tests require BREEZEDOC_WEB_EMAIL and '
+                . 'BREEZEDOC_WEB_PASSWORD environment variables to be set.'
+            );
+        }
+
+        return ['email' => $email, 'password' => $password];
+    }
+
+    private function readEnv(string $varName): ?string
+    {
+        $value = getenv($varName);
+        if ($value !== false && $value !== '') {
+            return $value;
+        }
+
+        if (isset($_ENV[$varName]) && $_ENV[$varName] !== '') {
+            return (string) $_ENV[$varName];
+        }
+
+        if (isset($_SERVER[$varName]) && $_SERVER[$varName] !== '') {
+            return (string) $_SERVER[$varName];
+        }
+
+        return null;
+    }
 }

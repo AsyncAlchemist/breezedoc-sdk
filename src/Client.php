@@ -13,6 +13,8 @@ use Breezedoc\Api\Users;
 use Breezedoc\Config\Configuration;
 use Breezedoc\Http\HttpClientFactory;
 use Breezedoc\Http\RequestBuilder;
+use Breezedoc\Web\WebClientFactory;
+use Breezedoc\Web\WebSession;
 use Psr\Http\Client\ClientInterface;
 
 /**
@@ -32,6 +34,7 @@ class Client
     private ?Recipients $recipients = null;
     private ?Invoices $invoices = null;
     private ?Teams $teams = null;
+    private ?WebSession $webSession = null;
 
     /**
      * Create a new Breezedoc client.
@@ -73,10 +76,45 @@ class Client
     public function documents(): Documents
     {
         if ($this->documents === null) {
-            $this->documents = new Documents($this->httpClient, $this->requestBuilder);
+            $this->documents = new Documents(
+                $this->httpClient,
+                $this->requestBuilder,
+                $this->resolveWebSession()
+            );
         }
 
         return $this->documents;
+    }
+
+    /**
+     * Build the shared web session for login-based PDF downloads, or null when no
+     * web login has been configured.
+     */
+    private function resolveWebSession(): ?WebSession
+    {
+        if (!$this->config->hasWebLogin()) {
+            return null;
+        }
+
+        if ($this->webSession === null) {
+            $email = $this->config->getWebEmail();
+            $password = $this->config->getWebPassword();
+            // hasWebLogin() guarantees both are set; assert for static analysis.
+            if ($email === null || $password === null) {
+                return null;
+            }
+
+            $this->webSession = new WebSession(
+                WebClientFactory::create($this->config->getTimeout()),
+                $this->config->getSessionStore(),
+                $email,
+                $password,
+                $this->config->getWebSessionTtl(),
+                $this->config->getWebBaseUrl()
+            );
+        }
+
+        return $this->webSession;
     }
 
     /**
