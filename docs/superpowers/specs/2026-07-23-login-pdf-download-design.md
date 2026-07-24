@@ -1,7 +1,13 @@
 # Design: Login-based PDF Download
 
-**Date:** 2026-07-23
-**Status:** Approved
+**Date:** 2026-07-23 (revised 2026-07-24)
+**Status:** Implemented
+
+> **Revision (2026-07-24):** the implementation uses the SDK's existing **PSR-18** HTTP stack
+> rather than Guzzle directly, so **no new runtime dependency** is added (guzzle stays
+> `require-dev`). `WebSession` handles cookies and the login/redirect flow itself. Sections
+> below reflect the final PSR-18 design; the originally-shipped Guzzle-concrete approach was
+> reverted before release.
 
 ## Problem
 
@@ -48,20 +54,27 @@ session across process runs so we don't re-login every time.
 
 ## Approach
 
-Pure HTTP via **Guzzle**, used directly for its native cookie jar and per-request redirect
-control — capabilities the SDK's PSR-18 abstraction does not model. The web flow is isolated
-in a `Breezedoc\Web` namespace so the core API client stays PSR-18 / token-only.
+Pure HTTP over the SDK's existing **PSR-18** stack (`Psr\Http\Client\ClientInterface` +
+PSR-17 factories, resolved via `php-http/discovery` or injected). The web flow is isolated in
+a `Breezedoc\Web` namespace so the core API client stays token-only. **No new runtime
+dependency** — `guzzlehttp/guzzle` stays `require-dev` (bumped to `7.15.1` for the security
+fix).
 
-**Packaging impact:** Guzzle is currently a `require-dev` dependency (the core client is
-PSR-18-agnostic via `php-http/discovery`). Because `WebSession` references
-`GuzzleHttp\Client` directly in `src/`, **`guzzlehttp/guzzle` moves from `require-dev` to
-`require`** (pinned `7.15.1`). This adds a hard runtime dependency on Guzzle for all SDK
-consumers. Accepted because: (a) the chosen approach is explicitly Guzzle-based, (b) Guzzle
-is the de-facto PSR-18 client discovery already selects, and (c) the alternative
-(hand-rolled cookie/redirect handling over PSR-18) is more code and fragile across PSR-18
-client implementations with differing redirect semantics. The core API path is unchanged
-and still routes through PSR-18. `WebSession` accepts an injected `GuzzleHttp\ClientInterface`
-so tests supply a `MockHandler`-backed client.
+Since PSR-18 does not model cookies or redirect-following, `WebSession` handles both itself:
+
+- **Cookies:** captured from each response's `Set-Cookie` and resent on the `Cookie` header
+  (a simple name→value map — one host, no RFC 6265 path/domain logic needed). Deletion cookies
+  (empty value / `Max-Age=0` / 1970 expiry) evict from the jar.
+- **Form body:** the login POST is `application/x-www-form-urlencoded`, built with
+  `http_build_query()` + the PSR-17 stream factory.
+- **Redirects:** the flow assumes a client whose `sendRequest()` does not follow redirects
+  (the norm — Guzzle's PSR-18 adapter forces `allow_redirects => false`), so the `302` is
+  observed directly. Detection is also written to tolerate a following client by inspecting
+  the landed-on page (login form vs. authenticated page).
+- **Transport errors:** `Psr\Http\Client\ClientExceptionInterface` is wrapped in `ApiException`.
+
+`WebSession` takes the PSR-18 client + PSR-17 request/stream factories by constructor
+injection, so unit tests supply a `php-http/mock-client` PSR-18 mock.
 
 ## Public API
 
@@ -88,24 +101,30 @@ $path  = $client->documents()->downloadPdfTo(311939, '/tmp');       // saves, re
 
 New namespace `Breezedoc\Web` (directory `src/Web/`):
 
-- **`WebSession`** — owns a Guzzle client bound to the web origin (`https://breezedoc.com`)
-  with a cookie jar, browser `User-Agent`, and `allow_redirects => false`. Responsibilities:
+- **`WebSession`** — takes a PSR-18 `ClientInterface` + PSR-17 request/stream factories by
+  constructor injection, bound to the web origin (`https://breezedoc.com`). Manages an
+  in-memory cookie map and sends a browser `User-Agent` on every request. Responsibilities:
   - `getPdf(int $id): string` — ensure authenticated, GET the download route, branch on the
     response, run the single reactive re-login+retry, return bytes.
-  - `login(): void` — GET `/login`, scrape `_token`, POST credentials, verify 302 success,
+  - `login(): void` — GET `/login`, scrape `_token`, POST credentials, verify success,
     capture cookies, persist session state.
-  - `validate(): bool` — cheap authenticated probe (`GET /documents`, 200 vs 302→login).
+  - `validate(): bool` — cheap authenticated probe (`GET /documents`, authenticated page vs.
+    login page).
   - `logout(): void` — clear the store + in-memory jar.
-  - Encapsulates CSRF scraping, dead-session detection, and the single-flight retry guard.
+  - Encapsulates CSRF scraping, cookie capture/replay, form encoding, dead-session detection,
+    transport-error wrapping, and the single-flight retry guard.
 - **`SessionStore`** (interface) — `load(): ?SessionState`, `save(SessionState): void`,
   `clear(): void`.
   - **`FileSessionStore`** — JSON file at a configurable path (default `~/.breezedoc/session.json`),
     written with `0600` permissions; parent dir created `0700` if missing.
   - **`ArraySessionStore`** — in-memory, for tests and stateless use.
-- **`SessionState`** — value object: serialized cookies (name/value/expiry), the owning
-  account **email**, and the login timestamp. Serializes to/from a plain array (JSON).
-- **`WebClientFactory`** — builds the configured Guzzle client (injectable so unit tests
-  pass a `MockHandler`-backed client).
+- **`SessionState`** — value object: cookies as a `name → value` map, the owning account
+  **email**, and the login timestamp. Serializes to/from a plain array (JSON); `fromArray()`
+  is defensive and returns `null` for malformed data (which also discards any older cache
+  format so a fresh login is performed).
+
+(No `WebClientFactory` — the SDK's `HttpClientFactory` already provides the PSR-18 client and
+PSR-17 factories, which `Client` passes to `WebSession`.)
 
 Modified:
 
@@ -168,21 +187,33 @@ Reuses existing `Breezedoc\Exceptions\*`. No new exception types.
 
 ## Testing
 
-**Unit** (Guzzle `MockHandler` + history middleware for request assertions, no live
-credentials; inject the mocked `GuzzleHttp\Client` into `WebSession` and use an
-`ArraySessionStore`):
+**Unit** (`php-http/mock-client` PSR-18 mock + Nyholm PSR-17 factory, no live credentials;
+inject the mock into `WebSession` with an `ArraySessionStore`; assert against
+`MockClient::getRequests()`):
 
-- login success: GET form (HTML with `_token`) → POST 302 → cookies captured, state saved.
-- login failure: POST returns 200 login page / 302 back to `/login` → `AuthenticationException`.
+- login success via redirect **and** via a followed-200 dashboard (redirect-agnostic).
+- login failure via `302 → /login` **and** via a followed-200 login form.
 - login blocked: GET `/login` has no `_token` / challenge markers → `AuthenticationException`.
-- `downloadPdf` happy path: 200 `application/pdf` → returns bytes.
-- reactive re-login: first GET → 302 `/login`, then login, then GET → 200 pdf → returns bytes;
-  asserts exactly one re-login occurred.
-- `downloadPdf` 403 → `AuthorizationException` with **no** re-login attempt; 404 → `NotFoundException`.
+- credentials + `_token` sent as `application/x-www-form-urlencoded`; token extraction from the
+  `_token` input (either attribute order) and the `csrf-token` meta fallback.
+- cookies captured from `Set-Cookie` (incl. multiple headers) and replayed on the `Cookie`
+  header; deletion cookies evicted; persisted as a name→value map.
+- browser `User-Agent` present on every request; **no `Authorization` header** leaks.
+- `downloadPdf` happy path (200 `application/pdf`) → returns bytes; hits the correct URL.
+- reactive re-login via both `302 → /login` and a followed-200 login page; asserts exactly one
+  re-login; gives up (throws) after a second failure.
+- `downloadPdf` 403 → `AuthorizationException` with **no** re-login; 404 → `NotFoundException`;
+  429 → `RateLimitException`; other → `ApiException`.
+- transport failure (`ClientExceptionInterface`) → `ApiException` wrapping the original.
 - TTL: within TTL reuses cached session (no login request); past TTL triggers a proactive login.
 - email mismatch: cached session for a different email is discarded and a fresh login performed.
-- `FileSessionStore`: round-trips `SessionState`; created file is `0600`.
-- `downloadPdfTo`: saves bytes to `document-{id}.pdf`; bad directory → `RuntimeException`.
+- `validate()`: true for a live session; false on redirect-to-login, on a followed login page,
+  with no stored session, and for a different email (last two make no HTTP call).
+- `logout()` clears the store.
+- `SessionState`: round-trip, expiry math, and `fromArray()` rejecting malformed / legacy data.
+- `FileSessionStore`: round-trips `SessionState`; created file is `0600`; corrupt file → null.
+- `downloadPdfTo`: saves bytes to `document-{id}.pdf`; bad directory → `RuntimeException`;
+  `downloadPdf` without web login → `InvalidArgumentException`.
 
 **Integration** (guarded by `BREEZEDOC_WEB_EMAIL` / `BREEZEDOC_WEB_PASSWORD`; skips if unset,
 matching the existing `IntegrationTestCase` pattern): real login + `downloadPdf()` on a
@@ -202,7 +233,10 @@ discovered via the API (first completed document) or a configured id.
 ## Compatibility
 
 - PHP 7.4+ (matches the SDK floor; no PHP 8-only syntax).
-- Guzzle 7.15.1 — **promoted from `require-dev` to `require`**. `WebSession` uses
-  `GuzzleHttp\Client`, `GuzzleHttp\Cookie\CookieJar`, and PSR-7 messages.
+- **No new runtime dependency.** `WebSession` uses only `Psr\Http\Client` / `Psr\Http\Message`
+  / `Psr\Http\Factory` interfaces. `guzzlehttp/guzzle` stays `require-dev` (bumped to `7.15.1`
+  for the security fix).
+- Expects a PSR-18 client whose `sendRequest()` does not follow redirects (the norm, e.g.
+  Guzzle's PSR-18 adapter). Detection tolerates a following client where feasible.
 - No change to the existing PSR-18 API client path.
 ```

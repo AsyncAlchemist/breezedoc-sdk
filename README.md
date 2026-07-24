@@ -146,6 +146,10 @@ $config->setSessionStore(new FileSessionStore('/secure/path/session.json'))
        ->setWebSessionTtl(1800); // seconds a cached session is trusted before a proactive re-login
 ```
 
+Like the rest of the SDK, this uses your configured/auto-discovered PSR-18 client — no extra
+dependency is required. It expects a client whose `sendRequest()` does not follow redirects
+(the standard behavior, e.g. Guzzle's PSR-18 adapter).
+
 > **⚠️ Caveat.** This feature automates the BreezeDoc website login. It may be against
 > BreezeDoc's Terms of Service and is inherently brittle — a change to their login page or bot
 > protection can break it at any time. The cached session file is a live credential (treat it

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-07-23
+## [0.4.0] - 2026-07-24
 
 ### Added
 
@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Configuration::setWebLogin(string $email, string $password)` configures the website credentials for the PDF download feature (distinct from the API token). Also `setSessionStore()`, `setWebSessionTtl()`, and `setWebBaseUrl()`.
 - `Breezedoc\Web\SessionStore` interface with `FileSessionStore` (default `~/.breezedoc/session.json`, written `0600`) and `ArraySessionStore`. The login session is cached long-term and reused across runs; expired sessions are detected and refreshed automatically (a stored session is only re-used if it belongs to the configured account and is within the TTL). The password is never persisted.
 
+The PDF download feature runs over the SDK's existing PSR-18 HTTP stack — **no new runtime dependency** is added. Cookies and the login/redirect handling are done in `WebSession`, so it works with any PSR-18 client whose `sendRequest()` does not follow redirects (the norm, e.g. Guzzle's PSR-18 adapter).
+
 ### Changed
 
-- **`guzzlehttp/guzzle` promoted from `require-dev` to `require` (`7.15.1`).** It is now a runtime dependency used by the PDF download feature. This also clears the security advisories that affected the previous `7.10.4` pin (which broke `composer install`).
+- Bumped the `guzzlehttp/guzzle` **dev** dependency to `7.15.1`, clearing the security advisories that affected the previous `7.10.4` pin (which broke `composer install` under Composer's advisory policy). Guzzle remains a `require-dev` dependency only.
 
 ### Notes
 

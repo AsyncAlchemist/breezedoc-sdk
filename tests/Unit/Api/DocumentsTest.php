@@ -14,10 +14,6 @@ use Breezedoc\Tests\Unit\UnitTestCase;
 use Breezedoc\Web\ArraySessionStore;
 use Breezedoc\Web\SessionState;
 use Breezedoc\Web\WebSession;
-use GuzzleHttp\Client as GuzzleClient;
-use GuzzleHttp\Handler\MockHandler;
-use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Psr7\Response as GuzzleResponse;
 use Http\Mock\Client as MockHttpClient;
 use Nyholm\Psr7\Factory\Psr17Factory;
 
@@ -323,15 +319,19 @@ class DocumentsTest extends UnitTestCase
     private function documentsWithWebSession(string $pdfBody): Documents
     {
         $store = new ArraySessionStore();
-        $store->save(new SessionState('user@example.com', time(), []));
+        $store->save(new SessionState('user@example.com', time(), ['breezedoc_session' => 'x']));
 
-        $stack = HandlerStack::create(new MockHandler([
-            new GuzzleResponse(200, ['Content-Type' => 'application/pdf'], $pdfBody),
-        ]));
-        $guzzle = new GuzzleClient(['handler' => $stack]);
+        $webHttp = new MockHttpClient();
+        $webHttp->addResponse(
+            $this->psr17Factory->createResponse(200)
+                ->withHeader('Content-Type', 'application/pdf')
+                ->withBody($this->psr17Factory->createStream($pdfBody))
+        );
 
         $webSession = new WebSession(
-            $guzzle,
+            $webHttp,
+            $this->psr17Factory,
+            $this->psr17Factory,
             $store,
             'user@example.com',
             'secret',

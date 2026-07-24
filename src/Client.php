@@ -13,7 +13,6 @@ use Breezedoc\Api\Users;
 use Breezedoc\Config\Configuration;
 use Breezedoc\Http\HttpClientFactory;
 use Breezedoc\Http\RequestBuilder;
-use Breezedoc\Web\WebClientFactory;
 use Breezedoc\Web\WebSession;
 use Psr\Http\Client\ClientInterface;
 
@@ -105,7 +104,9 @@ class Client
             }
 
             $this->webSession = new WebSession(
-                WebClientFactory::create($this->config->getTimeout()),
+                $this->httpClient,
+                HttpClientFactory::createRequestFactory(),
+                HttpClientFactory::createStreamFactory(),
                 $this->config->getSessionStore(),
                 $email,
                 $password,

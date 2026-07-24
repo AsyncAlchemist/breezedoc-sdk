@@ -42,7 +42,7 @@ class FileSessionStoreTest extends TestCase
         $state = new SessionState(
             'user@example.com',
             1700000000,
-            [['Name' => 'breezedoc_session', 'Value' => 'abc', 'Domain' => 'breezedoc.com']]
+            ['breezedoc_session' => 'abc', 'XSRF-TOKEN' => 'xyz']
         );
 
         $store->save($state);

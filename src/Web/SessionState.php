@@ -7,10 +7,9 @@ namespace Breezedoc\Web;
 /**
  * Immutable snapshot of an authenticated web session.
  *
- * Holds the cookies for a logged-in breezedoc.com session (as produced by
- * {@see \GuzzleHttp\Cookie\CookieJar::toArray()}), the account email the session
- * belongs to, and the login timestamp used for TTL checks. The password is never
- * stored here.
+ * Holds the cookies for a logged-in breezedoc.com session (a simple name => value
+ * map), the account email the session belongs to, and the login timestamp used for
+ * TTL checks. The password is never stored here.
  */
 class SessionState
 {
@@ -18,12 +17,12 @@ class SessionState
     private int $createdAt;
 
     /**
-     * @var array<int, array<string, mixed>>
+     * @var array<string, string>
      */
     private array $cookies;
 
     /**
-     * @param array<int, array<string, mixed>> $cookies Cookie jar contents (CookieJar::toArray())
+     * @param array<string, string> $cookies Cookie name => value pairs
      */
     public function __construct(string $email, int $createdAt, array $cookies)
     {
@@ -43,7 +42,7 @@ class SessionState
     }
 
     /**
-     * @return array<int, array<string, mixed>>
+     * @return array<string, string>
      */
     public function getCookies(): array
     {
@@ -59,7 +58,7 @@ class SessionState
     }
 
     /**
-     * @return array{email: string, created_at: int, cookies: array<int, array<string, mixed>>}
+     * @return array{email: string, created_at: int, cookies: array<string, string>}
      */
     public function toArray(): array
     {
@@ -73,6 +72,10 @@ class SessionState
     /**
      * Rehydrate from a persisted array, or null if the data is not a valid session.
      *
+     * Returns null for anything that is not a well-formed name => value cookie map,
+     * which also causes sessions written by an older format to be discarded (and a
+     * fresh login performed) rather than misused.
+     *
      * @param array<string, mixed> $data
      */
     public static function fromArray(array $data): ?self
@@ -85,8 +88,13 @@ class SessionState
             return null;
         }
 
-        /** @var array<int, array<string, mixed>> $cookies */
-        $cookies = array_values($data['cookies']);
+        $cookies = [];
+        foreach ($data['cookies'] as $name => $value) {
+            if (!is_string($name) || !is_string($value)) {
+                return null;
+            }
+            $cookies[$name] = $value;
+        }
 
         return new self($data['email'], (int) $data['created_at'], $cookies);
     }

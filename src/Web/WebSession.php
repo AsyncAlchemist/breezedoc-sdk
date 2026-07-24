@@ -9,17 +9,26 @@ use Breezedoc\Exceptions\AuthenticationException;
 use Breezedoc\Exceptions\AuthorizationException;
 use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Exceptions\RateLimitException;
-use GuzzleHttp\ClientInterface;
-use GuzzleHttp\Cookie\CookieJar;
+use Psr\Http\Client\ClientExceptionInterface;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 
 /**
  * An authenticated breezedoc.com website session used to download signed PDFs
  * that the REST API does not expose.
  *
- * Performs the Laravel form login over plain HTTP (no browser), caches the
- * resulting session via a {@see SessionStore} so it is reused across runs, and
- * transparently re-logs-in when the cached session has expired.
+ * Performs the Laravel form login over plain HTTP (no browser) using any PSR-18
+ * client, caches the resulting session via a {@see SessionStore} so it is reused
+ * across runs, and transparently re-logs-in when the cached session has expired.
+ *
+ * Cookies and redirects are handled here rather than by the HTTP client: cookies
+ * are captured from `Set-Cookie` and resent on the `Cookie` header, and the flow
+ * is written to work with a PSR-18 client whose `sendRequest()` does not follow
+ * redirects (the norm — e.g. Guzzle's PSR-18 adapter). Detection also tolerates a
+ * client that does follow, by inspecting the landed-on page.
  */
 class WebSession
 {
@@ -31,17 +40,24 @@ class WebSession
         . '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
     private ClientInterface $http;
+    private RequestFactoryInterface $requestFactory;
+    private StreamFactoryInterface $streamFactory;
     private SessionStore $store;
     private string $email;
     private string $password;
     private int $ttl;
     private string $baseUrl;
 
-    private ?CookieJar $jar = null;
+    /**
+     * @var array<string, string>|null In-memory cookie jar (name => value); null until a session is established.
+     */
+    private ?array $cookies = null;
     private int $createdAt = 0;
 
     public function __construct(
         ClientInterface $http,
+        RequestFactoryInterface $requestFactory,
+        StreamFactoryInterface $streamFactory,
         SessionStore $store,
         string $email,
         string $password,
@@ -49,6 +65,8 @@ class WebSession
         string $baseUrl
     ) {
         $this->http = $http;
+        $this->requestFactory = $requestFactory;
+        $this->streamFactory = $streamFactory;
         $this->store = $store;
         $this->email = $email;
         $this->password = $password;
@@ -64,7 +82,7 @@ class WebSession
      * @throws AuthorizationException If the account cannot access the document
      * @throws NotFoundException If the document does not exist
      * @throws RateLimitException If rate limited
-     * @throws ApiException On any other unexpected response
+     * @throws ApiException On a transport failure or any other unexpected response
      */
     public function getPdf(int $id): string
     {
@@ -88,8 +106,8 @@ class WebSession
     }
 
     /**
-     * Check whether the currently cached session is still authenticated,
-     * without downloading anything. Does not trigger a login.
+     * Check whether the currently cached session is still authenticated, without
+     * downloading anything. Does not trigger a login.
      */
     public function validate(): bool
     {
@@ -98,12 +116,10 @@ class WebSession
             return false;
         }
 
-        $jar = new CookieJar(false, $state->getCookies());
-        $response = $this->http->request('GET', $this->baseUrl . '/documents', $this->options([
-            'cookies' => $jar,
-        ]));
+        $this->cookies = $state->getCookies();
+        $response = $this->get($this->baseUrl . '/documents');
 
-        return $response->getStatusCode() === 200;
+        return $this->landedAuthenticated($response);
     }
 
     /**
@@ -112,7 +128,7 @@ class WebSession
     public function logout(): void
     {
         $this->store->clear();
-        $this->jar = null;
+        $this->cookies = null;
         $this->createdAt = 0;
     }
 
@@ -122,7 +138,7 @@ class WebSession
      */
     private function ensureSession(): void
     {
-        if ($this->jar !== null) {
+        if ($this->cookies !== null) {
             return;
         }
 
@@ -132,7 +148,7 @@ class WebSession
             && $state->getEmail() === $this->email
             && !$state->isExpired($this->ttl, time())
         ) {
-            $this->jar = new CookieJar(false, $state->getCookies());
+            $this->cookies = $state->getCookies();
             $this->createdAt = $state->getCreatedAt();
             return;
         }
@@ -144,14 +160,13 @@ class WebSession
      * Perform the Laravel form login and persist the resulting session.
      *
      * @throws AuthenticationException
+     * @throws ApiException On a transport failure
      */
     private function login(): void
     {
-        $this->jar = new CookieJar();
+        $this->cookies = [];
 
-        $formResponse = $this->http->request('GET', $this->baseUrl . '/login', $this->options([
-            'headers' => $this->headers(['Accept' => 'text/html']),
-        ]));
+        $formResponse = $this->get($this->baseUrl . '/login', ['Accept' => 'text/html']);
 
         $token = $this->extractToken((string) $formResponse->getBody());
         if ($token === null) {
@@ -161,20 +176,21 @@ class WebSession
             );
         }
 
-        $loginResponse = $this->http->request('POST', $this->baseUrl . '/login', $this->options([
-            'headers' => $this->headers([
-                'Accept' => 'text/html',
-                'Origin' => $this->baseUrl,
-                'Referer' => $this->baseUrl . '/login',
-            ]),
-            'form_params' => [
+        $loginResponse = $this->postForm(
+            $this->baseUrl . '/login',
+            [
                 'email' => $this->email,
                 'password' => $this->password,
                 '_token' => $token,
             ],
-        ]));
+            [
+                'Accept' => 'text/html',
+                'Origin' => $this->baseUrl,
+                'Referer' => $this->baseUrl . '/login',
+            ]
+        );
 
-        if (!$this->isLoginSuccess($loginResponse)) {
+        if (!$this->landedAuthenticated($loginResponse)) {
             throw new AuthenticationException(
                 'Breezedoc login failed. Check the web login email and password.'
             );
@@ -186,11 +202,7 @@ class WebSession
 
     private function requestDownload(int $id): ResponseInterface
     {
-        return $this->http->request(
-            'GET',
-            $this->baseUrl . '/documents/' . $id . '/download',
-            $this->options()
-        );
+        return $this->get($this->baseUrl . '/documents/' . $id . '/download');
     }
 
     /**
@@ -251,10 +263,12 @@ class WebSession
     }
 
     /**
-     * Login succeeds when the POST redirects somewhere other than back to /login.
-     * A 200 means the form was re-rendered with validation errors.
+     * Whether a response indicates we ended up on an authenticated page rather than
+     * the login screen: a redirect to a non-/login route, or (with a
+     * redirect-following client) a 2xx page that is not the login form. Used for
+     * both login-success and session-validity checks.
      */
-    private function isLoginSuccess(ResponseInterface $response): bool
+    private function landedAuthenticated(ResponseInterface $response): bool
     {
         $status = $response->getStatusCode();
 
@@ -262,7 +276,16 @@ class WebSession
             return strpos($response->getHeaderLine('Location'), '/login') === false;
         }
 
+        if ($status >= 200 && $status < 300) {
+            return !$this->looksLikeLoginForm((string) $response->getBody());
+        }
+
         return false;
+    }
+
+    private function looksLikeLoginForm(string $body): bool
+    {
+        return stripos($body, 'name="password"') !== false;
     }
 
     private function extractToken(string $html): ?string
@@ -284,40 +307,114 @@ class WebSession
 
     private function persistState(): void
     {
-        if ($this->jar === null) {
-            return;
+        $this->store->save(new SessionState($this->email, $this->createdAt, $this->cookies ?? []));
+    }
+
+    /**
+     * Send a GET request carrying the current cookies, and capture any Set-Cookie.
+     *
+     * @param array<string, string> $headers
+     */
+    private function get(string $url, array $headers = []): ResponseInterface
+    {
+        $request = $this->requestFactory->createRequest('GET', $url);
+        return $this->send($this->prepare($request, $headers));
+    }
+
+    /**
+     * Send a POST request with a urlencoded form body.
+     *
+     * @param array<string, string> $fields
+     * @param array<string, string> $headers
+     */
+    private function postForm(string $url, array $fields, array $headers = []): ResponseInterface
+    {
+        $request = $this->requestFactory->createRequest('POST', $url)
+            ->withHeader('Content-Type', 'application/x-www-form-urlencoded')
+            ->withBody($this->streamFactory->createStream(http_build_query($fields)));
+
+        return $this->send($this->prepare($request, $headers));
+    }
+
+    /**
+     * Attach the browser headers and current cookies to a request.
+     *
+     * @param array<string, string> $headers
+     */
+    private function prepare(RequestInterface $request, array $headers): RequestInterface
+    {
+        $allHeaders = array_merge(['User-Agent' => self::USER_AGENT, 'Accept' => '*/*'], $headers);
+        foreach ($allHeaders as $name => $value) {
+            $request = $request->withHeader($name, $value);
         }
 
-        /** @var array<int, array<string, mixed>> $cookies */
-        $cookies = $this->jar->toArray();
-        $this->store->save(new SessionState($this->email, $this->createdAt, $cookies));
+        if ($this->cookies !== null && $this->cookies !== []) {
+            $pairs = [];
+            foreach ($this->cookies as $name => $value) {
+                $pairs[] = $name . '=' . $value;
+            }
+            $request = $request->withHeader('Cookie', implode('; ', $pairs));
+        }
+
+        return $request;
     }
 
     /**
-     * Merge Guzzle request options onto the defaults shared by every request.
+     * Dispatch the request and fold the response's cookies into the jar.
      *
-     * @param array<string, mixed> $extra
-     * @return array<string, mixed>
+     * @throws ApiException On a PSR-18 transport failure
      */
-    private function options(array $extra = []): array
+    private function send(RequestInterface $request): ResponseInterface
     {
-        return array_merge([
-            'cookies' => $this->jar,
-            'allow_redirects' => false,
-            'http_errors' => false,
-            'headers' => $this->headers(),
-        ], $extra);
+        try {
+            $response = $this->http->sendRequest($request);
+        } catch (ClientExceptionInterface $e) {
+            throw new ApiException(
+                'HTTP request to the Breezedoc website failed: ' . $e->getMessage(),
+                0,
+                $e
+            );
+        }
+
+        $this->captureCookies($response);
+
+        return $response;
     }
 
-    /**
-     * @param array<string, string> $extra
-     * @return array<string, string>
-     */
-    private function headers(array $extra = []): array
+    private function captureCookies(ResponseInterface $response): void
     {
-        return array_merge([
-            'User-Agent' => self::USER_AGENT,
-            'Accept' => '*/*',
-        ], $extra);
+        if ($this->cookies === null) {
+            $this->cookies = [];
+        }
+
+        foreach ($response->getHeader('Set-Cookie') as $line) {
+            $pair = trim(explode(';', $line, 2)[0]);
+            if ($pair === '' || strpos($pair, '=') === false) {
+                continue;
+            }
+
+            [$name, $value] = explode('=', $pair, 2);
+            $name = trim($name);
+            $value = trim($value);
+            if ($name === '') {
+                continue;
+            }
+
+            if ($value === '' || $this->isDeletionCookie($line)) {
+                unset($this->cookies[$name]);
+                continue;
+            }
+
+            $this->cookies[$name] = $value;
+        }
+    }
+
+    private function isDeletionCookie(string $line): bool
+    {
+        if (preg_match('/max-age\s*=\s*0(?!\d)/i', $line) === 1) {
+            return true;
+        }
+
+        return preg_match('/expires\s*=\s*[^;]*1970/i', $line) === 1;
     }
 }

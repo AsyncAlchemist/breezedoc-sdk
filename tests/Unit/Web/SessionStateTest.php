@@ -11,14 +11,14 @@ class SessionStateTest extends TestCase
 {
     public function testToArrayAndFromArrayRoundTrip(): void
     {
-        $state = new SessionState('user@example.com', 1700000000, [['Name' => 'c', 'Value' => 'v']]);
+        $state = new SessionState('user@example.com', 1700000000, ['breezedoc_session' => 'abc', 'XSRF-TOKEN' => 'xyz']);
 
         $restored = SessionState::fromArray($state->toArray());
 
         $this->assertNotNull($restored);
         $this->assertSame('user@example.com', $restored->getEmail());
         $this->assertSame(1700000000, $restored->getCreatedAt());
-        $this->assertSame([['Name' => 'c', 'Value' => 'v']], $restored->getCookies());
+        $this->assertSame(['breezedoc_session' => 'abc', 'XSRF-TOKEN' => 'xyz'], $restored->getCookies());
     }
 
     public function testIsExpiredComparesAgainstTtl(): void
@@ -49,6 +49,17 @@ class SessionStateTest extends TestCase
             'email' => 'a@b.com',
             'created_at' => 1,
             'cookies' => 'not-an-array',
+        ]));
+    }
+
+    public function testFromArrayReturnsNullForLegacyGuzzleCookieFormat(): void
+    {
+        // Old format stored a list of cookie arrays; the name => value map now expects
+        // string values, so a legacy cache is rejected (and a fresh login performed).
+        $this->assertNull(SessionState::fromArray([
+            'email' => 'a@b.com',
+            'created_at' => 1,
+            'cookies' => [['Name' => 'c', 'Value' => 'v']],
         ]));
     }
 }
