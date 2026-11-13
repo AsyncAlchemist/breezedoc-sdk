@@ -156,6 +156,30 @@ dependency is required. It expects a client whose `sendRequest()` does not follo
 > like a password and keep it out of version control). Your password is never written to disk —
 > only the session cookies are cached.
 
+#### Deleting a document
+
+The REST API has no document delete either. `deleteDocument()` uses the same website login and
+session cache as `downloadPdf()`: it submits the form of the site's "Delete" button, then checks
+that the document is gone. The delete cannot be undone.
+
+```php
+use Breezedoc\Exceptions\BreezedocException;
+use Breezedoc\Exceptions\NotFoundException;
+
+try {
+    $client->documents()->deleteDocument(123); // returns only when the document is gone
+} catch (NotFoundException $e) {
+    // The document was not there before the delete (already deleted, or not this account's).
+} catch (BreezedocException $e) {
+    // Login failed (AuthenticationException), the site refused the delete, or the
+    // document is still there after the delete.
+}
+```
+
+`deleteDocument()` returns normally only when a follow-up GET of the document's activity page
+answers 404. A dead session is re-logged-in once and an expired CSRF token (HTTP 419) is refreshed
+once. Exception messages carry the document id and the HTTP status only.
+
 ### Templates
 
 ```php
@@ -442,9 +466,12 @@ The Breezedoc API does **not** support PDF file upload. Documents can only be:
 2. Use the SDK to create documents from those templates
 3. Send documents for signing via the SDK
 
-### No Document Deletion
+### No Document Deletion via the REST API
 
-Documents cannot be deleted via API. Only invoices (in draft status) can be deleted.
+Documents cannot be deleted via the REST API (`DELETE /api/documents/{id}` answers 405). Only
+invoices (in draft status) can be deleted there. To delete a document, use
+`Documents::deleteDocument()`, which goes through the website (see
+[Deleting a document](#deleting-a-document)).
 
 ## Testing
 
