@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `BreezedocException` (an `ApiException` that carries the HTTP status, where there is one) on any other refusal (403, 419 after one token refresh, 5xx, an unexpected page), and when the document is still there after the delete.
   - A dead session is re-logged-in once per call, and an expired CSRF token (HTTP 419) is refreshed once. Exception messages carry the document id and the HTTP status only.
 
+### Changed
+
+- Bumped the **dev** dependencies `guzzlehttp/guzzle` to `7.15.6` and `squizlabs/php_codesniffer` to `4.0.4`. New security advisories cover the previous `7.15.1` and `4.0.1` pins, and Composer's advisory policy then refused `composer install`. Both stay `require-dev` only; the runtime requirements do not change.
+
 ## [0.4.0] - 2026-07-24
 
 ### Added
