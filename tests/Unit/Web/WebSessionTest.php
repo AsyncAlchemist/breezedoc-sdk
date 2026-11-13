@@ -8,6 +8,7 @@ use Breezedoc\Exceptions\ApiException;
 use Breezedoc\Exceptions\AuthenticationException;
 use Breezedoc\Exceptions\AuthorizationException;
 use Breezedoc\Exceptions\BreezedocException;
+use Breezedoc\Exceptions\DeleteNotConfirmedException;
 use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Exceptions\RateLimitException;
 use Breezedoc\Web\ArraySessionStore;
@@ -711,7 +712,7 @@ class WebSessionTest extends TestCase
         );
     }
 
-    public function testDeleteDocumentThrowsNotFoundWithoutPostingWhenAlreadyGone(): void
+    public function testDeleteDocumentThrowsNotFoundWithoutPostingWhenThePageAnswers404(): void
     {
         $session = $this->makeSession([$this->notFoundPage()], $this->cachedStore());
 
@@ -902,11 +903,31 @@ class WebSessionTest extends TestCase
 
         try {
             $session->deleteDocument(6);
-            $this->fail('Expected BreezedocException');
-        } catch (BreezedocException $e) {
-            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->fail('Expected AuthorizationException');
+        } catch (AuthorizationException $e) {
             $this->assertSame(403, $e->getCode());
             $this->assertSame(['GET /documents/6/activity'], $this->requestLines());
+            // The message names the step that failed: no delete was refused, none was sent.
+            $this->assertStringContainsString('activity page of document 6 before the delete', $e->getMessage());
+            $this->assertStringNotContainsString('refused the delete', $e->getMessage());
+        }
+    }
+
+    public function testDeleteDocumentNamesThePostStepWhenThePostIsRefused(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->html(500, 'Server Error')],
+            $this->cachedStore()
+        );
+
+        try {
+            $session->deleteDocument(15);
+            $this->fail('Expected ApiException');
+        } catch (ApiException $e) {
+            $this->assertSame(
+                'The Breezedoc website refused the delete of document 15 (HTTP 500).',
+                $e->getMessage()
+            );
         }
     }
 
@@ -950,10 +971,8 @@ class WebSessionTest extends TestCase
 
         try {
             $session->deleteDocument(311939);
-            $this->fail('Expected BreezedocException');
-        } catch (BreezedocException $e) {
-            $this->assertNotInstanceOf(NotFoundException::class, $e);
-            $this->assertNotInstanceOf(AuthenticationException::class, $e);
+            $this->fail('Expected DeleteNotConfirmedException');
+        } catch (DeleteNotConfirmedException $e) {
             $this->assertSame(
                 'The website still shows document 311939 after the delete.',
                 $e->getMessage()
@@ -970,12 +989,227 @@ class WebSessionTest extends TestCase
 
         try {
             $session->deleteDocument(13);
-            $this->fail('Expected BreezedocException');
-        } catch (BreezedocException $e) {
+            $this->fail('Expected ApiException');
+        } catch (ApiException $e) {
             $this->assertNotInstanceOf(NotFoundException::class, $e);
             $this->assertSame(500, $e->getCode());
-            $this->assertStringContainsString('13', $e->getMessage());
+            $this->assertStringContainsString('activity page of document 13 after the delete', $e->getMessage());
         }
+    }
+
+    public function testDeleteDocumentMapsForbiddenAtTheFollowUpCheck(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->deletedRedirect(), $this->html(403, 'Forbidden', 'text/plain')],
+            $this->cachedStore()
+        );
+
+        $this->expectException(AuthorizationException::class);
+        $session->deleteDocument(16);
+    }
+
+    public function testDeleteDocumentMapsRateLimitAtTheFollowUpCheck(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->deletedRedirect(), $this->html(429, 'Too Many Requests')],
+            $this->cachedStore()
+        );
+
+        $this->expectException(RateLimitException::class);
+        $session->deleteDocument(17);
+    }
+
+    public function testDeleteDocumentPersistsTheRolledSessionAfterSuccess(): void
+    {
+        $createdAt = time() - 100;
+        $store = new ArraySessionStore();
+        $store->save($this->validState($createdAt, ['breezedoc_session' => 'abc']));
+        $session = $this->makeSession([
+            $this->documentPage(),
+            $this->deletedRedirect(),
+            $this->withCookies($this->notFoundPage(), ['XSRF-TOKEN=rolled; path=/']),
+        ], $store);
+
+        $session->deleteDocument(18);
+
+        // Only the save after the follow-up check can put the rolled cookie in the store:
+        // no login ran, so nothing else saved the session.
+        $saved = $store->load();
+        $this->assertNotNull($saved);
+        $this->assertSame(['breezedoc_session' => 'abc', 'XSRF-TOKEN' => 'rolled'], $saved->getCookies());
+        $this->assertSame($createdAt, $saved->getCreatedAt());
+    }
+
+    public function testDeleteDocumentReLogsInWhenTheFollowUpCheckMeetsADeadSession(): void
+    {
+        $session = $this->makeSession([
+            $this->documentPage(),
+            $this->deletedRedirect(),
+            $this->redirectToLogin(),
+            $this->loginForm(),
+            $this->loginSuccessRedirect(),
+            $this->notFoundPage(),
+        ], $this->cachedStore());
+
+        $session->deleteDocument(19);
+
+        $this->assertSame(
+            [
+                'GET /documents/19/activity',
+                'POST /documents/19',
+                'GET /documents/19/activity',
+                'GET /login',
+                'POST /login',
+                'GET /documents/19/activity',
+            ],
+            $this->requestLines()
+        );
+    }
+
+    public function testDeleteDocumentFollowUpCheckRecognisesAFollowedLoginPage(): void
+    {
+        // A redirect-following client lands on the login form (200) when the session
+        // dies before the check; that is a dead session, not "the document is still there".
+        $session = $this->makeSession([
+            $this->documentPage(),
+            $this->deletedRedirect(),
+            $this->loginFailFollowed(),
+            $this->loginForm(),
+            $this->loginSuccessFollowed(),
+            $this->notFoundPage(),
+        ], $this->cachedStore());
+
+        $session->deleteDocument(20);
+
+        $this->assertSame(
+            [
+                'GET /documents/20/activity',
+                'POST /documents/20',
+                'GET /documents/20/activity',
+                'GET /login',
+                'POST /login',
+                'GET /documents/20/activity',
+            ],
+            $this->requestLines()
+        );
+    }
+
+    public function testDeleteDocumentThrowsWhenTheReLoginIsSpentAtTheFollowUpCheck(): void
+    {
+        $session = $this->makeSession([
+            $this->redirectToLogin(),
+            $this->loginForm(),
+            $this->loginSuccessRedirect(),
+            $this->documentPage(),
+            $this->deletedRedirect(),
+            $this->redirectToLogin(),
+        ], $this->cachedStore());
+
+        try {
+            $session->deleteDocument(23);
+            $this->fail('Expected AuthenticationException');
+        } catch (AuthenticationException $e) {
+            $this->assertSame(
+                [
+                    'GET /documents/23/activity',
+                    'GET /login',
+                    'POST /login',
+                    'GET /documents/23/activity',
+                    'POST /documents/23',
+                    'GET /documents/23/activity',
+                ],
+                $this->requestLines()
+            );
+        }
+    }
+
+    public function testDeleteDocumentReLogsInWhenADeadSessionShowsAs419OnThePost(): void
+    {
+        // Laravel checks the CSRF token before auth, so a dead session can answer the
+        // POST with 419. The token refresh then meets the dead session and re-logs in.
+        $session = $this->makeSession([
+            $this->documentPage('old-tok'),
+            $this->pageExpired(),
+            $this->redirectToLogin(),
+            $this->loginForm(),
+            $this->loginSuccessRedirect(),
+            $this->documentPage('new-tok'),
+            $this->deletedRedirect(),
+            $this->notFoundPage(),
+        ], $this->cachedStore());
+
+        $session->deleteDocument(24);
+
+        $this->assertSame(
+            [
+                'GET /documents/24/activity',
+                'POST /documents/24',
+                'GET /documents/24/activity',
+                'GET /login',
+                'POST /login',
+                'GET /documents/24/activity',
+                'POST /documents/24',
+                'GET /documents/24/activity',
+            ],
+            $this->requestLines()
+        );
+        $this->assertSame('new-tok', $this->formFieldsAt(6)['_token']);
+    }
+
+    public function testDeleteDocumentWithARedirectFollowingClientAndADeadSession(): void
+    {
+        $session = $this->makeSession([
+            $this->loginFailFollowed(),
+            $this->loginForm(),
+            $this->loginSuccessFollowed(),
+            $this->documentPage('after-login'),
+            $this->html(200, '<html><body><a href="/logout">Log out</a> Documents</body></html>'),
+            $this->notFoundPage(),
+        ], $this->cachedStore());
+
+        $session->deleteDocument(25);
+
+        $this->assertSame(
+            [
+                'GET /documents/25/activity',
+                'GET /login',
+                'POST /login',
+                'GET /documents/25/activity',
+                'POST /documents/25',
+                'GET /documents/25/activity',
+            ],
+            $this->requestLines()
+        );
+        $this->assertSame('after-login', $this->formFieldsAt(4)['_token']);
+    }
+
+    public function testDeleteDocumentWithARedirectFollowingClientAndADeadSessionAtThePost(): void
+    {
+        $session = $this->makeSession([
+            $this->documentPage('old-tok'),
+            $this->loginFailFollowed(),
+            $this->loginForm(),
+            $this->loginSuccessFollowed(),
+            $this->documentPage('new-tok'),
+            $this->html(200, '<html><body><a href="/logout">Log out</a> Documents</body></html>'),
+            $this->notFoundPage(),
+        ], $this->cachedStore());
+
+        $session->deleteDocument(26);
+
+        $this->assertSame(
+            [
+                'GET /documents/26/activity',
+                'POST /documents/26',
+                'GET /login',
+                'POST /login',
+                'GET /documents/26/activity',
+                'POST /documents/26',
+                'GET /documents/26/activity',
+            ],
+            $this->requestLines()
+        );
+        $this->assertSame('new-tok', $this->formFieldsAt(5)['_token']);
     }
 
     public function testDeleteDocumentPostThat404sIsDecidedByTheFollowUpCheck(): void
