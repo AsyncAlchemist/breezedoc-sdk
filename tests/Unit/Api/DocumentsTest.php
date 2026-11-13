@@ -312,6 +312,56 @@ class DocumentsTest extends UnitTestCase
         }
     }
 
+    public function testDeleteDocumentThrowsWhenNoWebLoginConfigured(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Web login credentials are required to delete documents');
+
+        // $this->documents was built without a WebSession.
+        $this->documents->deleteDocument(123);
+    }
+
+    public function testDeleteDocumentDelegatesToWebSession(): void
+    {
+        $store = new ArraySessionStore();
+        $store->save(new SessionState('user@example.com', time(), ['breezedoc_session' => 'x']));
+
+        $webHttp = new MockHttpClient();
+        $webHttp->addResponse(
+            $this->psr17Factory->createResponse(200)
+                ->withHeader('Content-Type', 'text/html')
+                ->withBody($this->psr17Factory->createStream('<meta name="csrf-token" content="tok">'))
+        );
+        $webHttp->addResponse(
+            $this->psr17Factory->createResponse(302)->withHeader('Location', 'https://breezedoc.com/documents')
+        );
+        $webHttp->addResponse($this->psr17Factory->createResponse(404));
+
+        $webSession = new WebSession(
+            $webHttp,
+            $this->psr17Factory,
+            $this->psr17Factory,
+            $store,
+            'user@example.com',
+            'secret',
+            3600,
+            'https://breezedoc.com'
+        );
+        $documents = new Documents($this->httpClient, $this->makeRequestBuilder(), $webSession);
+
+        $documents->deleteDocument(311939);
+
+        $lines = array_map(static function ($request): string {
+            return $request->getMethod() . ' ' . $request->getUri()->getPath();
+        }, $webHttp->getRequests());
+        $this->assertSame(
+            ['GET /documents/311939/activity', 'POST /documents/311939', 'GET /documents/311939/activity'],
+            $lines
+        );
+        // The REST API client is not used for the delete.
+        $this->assertCount(0, $this->httpClient->getRequests());
+    }
+
     /**
      * Build a Documents resource whose WebSession serves the given PDF body from a
      * cached (valid) session, so no live login is attempted.

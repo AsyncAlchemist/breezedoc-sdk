@@ -91,9 +91,10 @@ class Configuration
     /**
      * Set the breezedoc.com website login credentials.
      *
-     * These are only needed for the login-based PDF download feature
-     * ({@see \Breezedoc\Api\Documents::downloadPdf()}). They are the website
-     * email and password, not the API token.
+     * These are only needed for the website-based features: the signed-PDF
+     * download ({@see \Breezedoc\Api\Documents::downloadPdf()}) and the document
+     * delete ({@see \Breezedoc\Api\Documents::deleteDocument()}). They are the
+     * website email and password, not the API token.
      *
      * @return $this
      */

@@ -85,6 +85,9 @@ File upload is only available through the Breezedoc web UI.
 ### No Document Deletion
 
 Documents cannot be deleted via API. Only draft invoices can be deleted.
+`DELETE /api/documents/{id}` answers 405 ("Supported methods: GET, HEAD"). The SDK's
+`Documents::deleteDocument()` deletes through the website instead (see
+`docs/superpowers/specs/2026-11-12-web-delete-document-design.md`).
 
 ---
 

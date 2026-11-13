@@ -7,6 +7,7 @@ namespace Breezedoc\Tests\Unit\Web;
 use Breezedoc\Exceptions\ApiException;
 use Breezedoc\Exceptions\AuthenticationException;
 use Breezedoc\Exceptions\AuthorizationException;
+use Breezedoc\Exceptions\BreezedocException;
 use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Exceptions\RateLimitException;
 use Breezedoc\Web\ArraySessionStore;
@@ -578,5 +579,493 @@ class WebSessionTest extends TestCase
 
         $session->logout();
         $this->assertNull($store->load());
+    }
+
+    // --- deleteDocument ----------------------------------------------------
+
+    /**
+     * An authenticated document activity page carrying the CSRF meta tag (as the
+     * site's layout does) and, optionally, a different form `_token`.
+     */
+    private function documentPage(string $metaToken = 'page-tok', ?string $formToken = null): ResponseInterface
+    {
+        $html = '<html><head><meta name="csrf-token" content="' . $metaToken . '"></head><body>'
+            . '<h1>Activity</h1><a href="/logout">Log out</a>';
+        if ($formToken !== null) {
+            $html .= '<form action="' . self::BASE . '/documents/1" method="post">'
+                . '<input type="hidden" name="_token" value="' . $formToken . '">'
+                . '<input type="hidden" name="_method" value="DELETE"></form>';
+        }
+        $html .= '</body></html>';
+
+        return $this->html(200, $html);
+    }
+
+    private function notFoundPage(): ResponseInterface
+    {
+        return $this->html(404, '<html><body>Not Found</body></html>');
+    }
+
+    private function deletedRedirect(): ResponseInterface
+    {
+        return $this->psr17->createResponse(302)->withHeader('Location', self::BASE . '/documents');
+    }
+
+    private function pageExpired(): ResponseInterface
+    {
+        return $this->html(419, '<html><body>Page Expired</body></html>');
+    }
+
+    private function cachedStore(): ArraySessionStore
+    {
+        $store = new ArraySessionStore();
+        $store->save($this->validState());
+        return $store;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function formFieldsAt(int $index): array
+    {
+        parse_str((string) $this->requestAt($index)->getBody(), $fields);
+        /** @var array<string, string> $fields */
+        return $fields;
+    }
+
+    public function testDeleteDocumentSucceedsWhenFollowUpCheckAnswers404(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->deletedRedirect(), $this->notFoundPage()],
+            $this->cachedStore()
+        );
+
+        $session->deleteDocument(311939);
+
+        $this->assertSame(
+            ['GET /documents/311939/activity', 'POST /documents/311939', 'GET /documents/311939/activity'],
+            $this->requestLines()
+        );
+    }
+
+    public function testDeleteDocumentPostsTheDeleteFormAsABrowserWould(): void
+    {
+        $store = new ArraySessionStore();
+        $store->save($this->validState(null, ['breezedoc_session' => 'cachedval']));
+        $session = $this->makeSession(
+            [$this->documentPage('csrf-abc'), $this->deletedRedirect(), $this->notFoundPage()],
+            $store
+        );
+
+        $session->deleteDocument(42);
+
+        $post = $this->requestAt(1);
+        $this->assertSame('POST', $post->getMethod());
+        $this->assertSame(self::BASE . '/documents/42', (string) $post->getUri());
+        $this->assertSame(['_token' => 'csrf-abc', '_method' => 'DELETE'], $this->formFieldsAt(1));
+        $this->assertSame('application/x-www-form-urlencoded', $post->getHeaderLine('Content-Type'));
+        $this->assertSame(self::BASE, $post->getHeaderLine('Origin'));
+        $this->assertSame(self::BASE . '/documents', $post->getHeaderLine('Referer'));
+        $this->assertStringContainsString('breezedoc_session=cachedval', $post->getHeaderLine('Cookie'));
+        $this->assertStringContainsString('Mozilla/5.0', $post->getHeaderLine('User-Agent'));
+        $this->assertFalse($post->hasHeader('Authorization'));
+    }
+
+    public function testDeleteDocumentPrefersTheMetaTokenOverAFormToken(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage('meta-tok', 'form-tok'), $this->deletedRedirect(), $this->notFoundPage()],
+            $this->cachedStore()
+        );
+
+        $session->deleteDocument(1);
+
+        $this->assertSame('meta-tok', $this->formFieldsAt(1)['_token']);
+    }
+
+    public function testDeleteDocumentFallsBackToTheFormToken(): void
+    {
+        $page = $this->html(200, '<form method="post"><input type="hidden" name="_token" value="form-only">'
+            . '<input type="hidden" name="_method" value="DELETE"></form>');
+        $session = $this->makeSession([$page, $this->deletedRedirect(), $this->notFoundPage()], $this->cachedStore());
+
+        $session->deleteDocument(1);
+
+        $this->assertSame('form-only', $this->formFieldsAt(1)['_token']);
+    }
+
+    public function testDeleteDocumentSucceedsWithARedirectFollowingClient(): void
+    {
+        // A following client lands on the documents list (200) after the delete.
+        $documentsList = $this->html(200, '<html><body><a href="/logout">Log out</a> Documents</body></html>');
+        $session = $this->makeSession(
+            [$this->documentPage(), $documentsList, $this->notFoundPage()],
+            $this->cachedStore()
+        );
+
+        $session->deleteDocument(8);
+
+        $this->assertSame(
+            ['GET /documents/8/activity', 'POST /documents/8', 'GET /documents/8/activity'],
+            $this->requestLines()
+        );
+    }
+
+    public function testDeleteDocumentThrowsNotFoundWithoutPostingWhenAlreadyGone(): void
+    {
+        $session = $this->makeSession([$this->notFoundPage()], $this->cachedStore());
+
+        try {
+            $session->deleteDocument(77);
+            $this->fail('Expected NotFoundException');
+        } catch (NotFoundException $e) {
+            $this->assertSame(['GET /documents/77/activity'], $this->requestLines());
+            $this->assertStringContainsString('77', $e->getMessage());
+        }
+    }
+
+    public function testDeleteDocumentLogsInWhenNoCachedSession(): void
+    {
+        $session = $this->makeSession([
+            $this->loginForm(),
+            $this->loginSuccessRedirect(),
+            $this->documentPage(),
+            $this->deletedRedirect(),
+            $this->notFoundPage(),
+        ]);
+
+        $session->deleteDocument(5);
+
+        $this->assertSame(
+            ['GET /login', 'POST /login', 'GET /documents/5/activity', 'POST /documents/5', 'GET /documents/5/activity'],
+            $this->requestLines()
+        );
+    }
+
+    public function testDeleteDocumentReLogsInOnceWhenTheCachedSessionIsDead(): void
+    {
+        $store = $this->cachedStore();
+        $session = $this->makeSession([
+            $this->redirectToLogin(),
+            $this->loginForm(),
+            $this->loginSuccessRedirect(['breezedoc_session=fresh; path=/']),
+            $this->documentPage('after-login'),
+            $this->deletedRedirect(),
+            $this->notFoundPage(),
+        ], $store);
+
+        $session->deleteDocument(99);
+
+        $this->assertSame(
+            [
+                'GET /documents/99/activity',
+                'GET /login',
+                'POST /login',
+                'GET /documents/99/activity',
+                'POST /documents/99',
+                'GET /documents/99/activity',
+            ],
+            $this->requestLines()
+        );
+        $this->assertSame('after-login', $this->formFieldsAt(4)['_token']);
+        $this->assertSame('fresh', $store->load()->getCookies()['breezedoc_session']);
+    }
+
+    public function testDeleteDocumentReLogsInWhenThePostMeetsADeadSession(): void
+    {
+        $session = $this->makeSession([
+            $this->documentPage('old-tok'),
+            $this->redirectToLogin(),
+            $this->loginForm(),
+            $this->loginSuccessRedirect(),
+            $this->documentPage('new-tok'),
+            $this->deletedRedirect(),
+            $this->notFoundPage(),
+        ], $this->cachedStore());
+
+        $session->deleteDocument(12);
+
+        $this->assertSame(
+            [
+                'GET /documents/12/activity',
+                'POST /documents/12',
+                'GET /login',
+                'POST /login',
+                'GET /documents/12/activity',
+                'POST /documents/12',
+                'GET /documents/12/activity',
+            ],
+            $this->requestLines()
+        );
+        $this->assertSame('new-tok', $this->formFieldsAt(5)['_token']);
+    }
+
+    public function testDeleteDocumentGivesUpAfterOneReLogin(): void
+    {
+        $session = $this->makeSession([
+            $this->redirectToLogin(),
+            $this->loginForm(),
+            $this->loginSuccessRedirect(),
+            $this->redirectToLogin(),
+        ], $this->cachedStore());
+
+        try {
+            $session->deleteDocument(3);
+            $this->fail('Expected AuthenticationException');
+        } catch (AuthenticationException $e) {
+            $this->assertNotContains('POST /documents/3', $this->requestLines());
+        }
+    }
+
+    public function testDeleteDocumentThrowsAuthenticationExceptionWhenLoginFails(): void
+    {
+        $session = $this->makeSession([$this->loginForm(), $this->loginFailRedirect()]);
+
+        try {
+            $session->deleteDocument(4);
+            $this->fail('Expected AuthenticationException');
+        } catch (AuthenticationException $e) {
+            $this->assertSame(['GET /login', 'POST /login'], $this->requestLines());
+        }
+    }
+
+    public function testDeleteDocumentRefreshesTheTokenOnceAfter419(): void
+    {
+        $session = $this->makeSession([
+            $this->documentPage('stale-tok'),
+            $this->pageExpired(),
+            $this->documentPage('fresh-tok'),
+            $this->deletedRedirect(),
+            $this->notFoundPage(),
+        ], $this->cachedStore());
+
+        $session->deleteDocument(21);
+
+        $this->assertSame(
+            [
+                'GET /documents/21/activity',
+                'POST /documents/21',
+                'GET /documents/21/activity',
+                'POST /documents/21',
+                'GET /documents/21/activity',
+            ],
+            $this->requestLines()
+        );
+        $this->assertSame('stale-tok', $this->formFieldsAt(1)['_token']);
+        $this->assertSame('fresh-tok', $this->formFieldsAt(3)['_token']);
+    }
+
+    public function testDeleteDocumentThrowsWhen419RepeatsAfterTheTokenRefresh(): void
+    {
+        $session = $this->makeSession([
+            $this->documentPage(),
+            $this->pageExpired(),
+            $this->documentPage(),
+            $this->pageExpired(),
+        ], $this->cachedStore());
+
+        try {
+            $session->deleteDocument(22);
+            $this->fail('Expected BreezedocException');
+        } catch (BreezedocException $e) {
+            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->assertNotInstanceOf(AuthenticationException::class, $e);
+            $this->assertInstanceOf(ApiException::class, $e);
+            $this->assertSame(419, $e->getCode());
+            $this->assertCount(4, $this->requestLines());
+        }
+    }
+
+    public function testDeleteDocumentThrowsOnForbiddenPostWithoutRetry(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->html(403, 'Forbidden', 'text/plain')],
+            $this->cachedStore()
+        );
+
+        try {
+            $session->deleteDocument(484041);
+            $this->fail('Expected BreezedocException');
+        } catch (BreezedocException $e) {
+            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->assertSame(403, $e->getCode());
+            $this->assertSame(
+                ['GET /documents/484041/activity', 'POST /documents/484041'],
+                $this->requestLines()
+            );
+        }
+    }
+
+    public function testDeleteDocumentThrowsOnForbiddenPageWithoutPosting(): void
+    {
+        $session = $this->makeSession([$this->html(403, 'Forbidden', 'text/plain')], $this->cachedStore());
+
+        try {
+            $session->deleteDocument(6);
+            $this->fail('Expected BreezedocException');
+        } catch (BreezedocException $e) {
+            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->assertSame(403, $e->getCode());
+            $this->assertSame(['GET /documents/6/activity'], $this->requestLines());
+        }
+    }
+
+    public function testDeleteDocumentThrowsOnServerErrorFromThePost(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->html(500, 'Server Error')],
+            $this->cachedStore()
+        );
+
+        try {
+            $session->deleteDocument(9);
+            $this->fail('Expected BreezedocException');
+        } catch (BreezedocException $e) {
+            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->assertSame(500, $e->getCode());
+            $this->assertCount(2, $this->requestLines());
+        }
+    }
+
+    public function testDeleteDocumentThrowsWithoutPostingWhenThePageHasNoToken(): void
+    {
+        $page = $this->html(200, '<html><body><a href="/logout">Log out</a></body></html>');
+        $session = $this->makeSession([$page], $this->cachedStore());
+
+        try {
+            $session->deleteDocument(10);
+            $this->fail('Expected BreezedocException');
+        } catch (BreezedocException $e) {
+            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->assertSame(['GET /documents/10/activity'], $this->requestLines());
+        }
+    }
+
+    public function testDeleteDocumentThrowsWhenTheDocumentIsStillThereAfterTheDelete(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->deletedRedirect(), $this->documentPage()],
+            $this->cachedStore()
+        );
+
+        try {
+            $session->deleteDocument(311939);
+            $this->fail('Expected BreezedocException');
+        } catch (BreezedocException $e) {
+            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->assertNotInstanceOf(AuthenticationException::class, $e);
+            $this->assertSame(
+                'The website still shows document 311939 after the delete.',
+                $e->getMessage()
+            );
+        }
+    }
+
+    public function testDeleteDocumentThrowsWhenTheFollowUpCheckIsUnexpected(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->deletedRedirect(), $this->html(500, 'Server Error')],
+            $this->cachedStore()
+        );
+
+        try {
+            $session->deleteDocument(13);
+            $this->fail('Expected BreezedocException');
+        } catch (BreezedocException $e) {
+            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->assertSame(500, $e->getCode());
+            $this->assertStringContainsString('13', $e->getMessage());
+        }
+    }
+
+    public function testDeleteDocumentPostThat404sIsDecidedByTheFollowUpCheck(): void
+    {
+        $session = $this->makeSession(
+            [$this->documentPage(), $this->notFoundPage(), $this->notFoundPage()],
+            $this->cachedStore()
+        );
+
+        $session->deleteDocument(14);
+
+        $this->assertSame(
+            ['GET /documents/14/activity', 'POST /documents/14', 'GET /documents/14/activity'],
+            $this->requestLines()
+        );
+    }
+
+    public function testDeleteDocumentExceptionMessagesCarryNoSecret(): void
+    {
+        $password = 'pw-Very-Secret-9f3a';
+        $cookie = 'cookie-Very-Secret-77c1';
+        $token = 'csrf-Very-Secret-41de';
+
+        $scenarios = [
+            'login fails' => [
+                $this->loginForm($token, ['XSRF-TOKEN=' . $cookie . '; path=/']),
+                $this->loginFailRedirect(),
+            ],
+            'already gone' => [
+                $this->loginForm($token, ['XSRF-TOKEN=' . $cookie . '; path=/']),
+                $this->loginSuccessRedirect(['breezedoc_session=' . $cookie . '; path=/']),
+                $this->notFoundPage(),
+            ],
+            '419 twice' => [
+                $this->loginForm($token),
+                $this->loginSuccessRedirect(['breezedoc_session=' . $cookie . '; path=/']),
+                $this->documentPage($token),
+                $this->pageExpired(),
+                $this->documentPage($token),
+                $this->pageExpired(),
+            ],
+            'forbidden' => [
+                $this->loginForm($token),
+                $this->loginSuccessRedirect(['breezedoc_session=' . $cookie . '; path=/']),
+                $this->documentPage($token),
+                $this->html(403, 'Forbidden ' . $token, 'text/plain'),
+            ],
+            'still there' => [
+                $this->loginForm($token),
+                $this->loginSuccessRedirect(['breezedoc_session=' . $cookie . '; path=/']),
+                $this->documentPage($token),
+                $this->deletedRedirect(),
+                $this->documentPage($token),
+            ],
+            'relogin spent' => [
+                $this->loginForm($token),
+                $this->loginSuccessRedirect(['breezedoc_session=' . $cookie . '; path=/']),
+                $this->redirectToLogin(),
+                $this->loginForm($token),
+                $this->loginSuccessRedirect(['breezedoc_session=' . $cookie . '; path=/']),
+                $this->redirectToLogin(),
+            ],
+        ];
+
+        foreach ($scenarios as $name => $responses) {
+            $http = new MockClient();
+            foreach ($responses as $response) {
+                $http->addResponse($response);
+            }
+            $session = new WebSession(
+                $http,
+                $this->psr17,
+                $this->psr17,
+                new ArraySessionStore(),
+                self::EMAIL,
+                $password,
+                3600,
+                self::BASE
+            );
+
+            try {
+                $session->deleteDocument(555);
+                $this->fail('Expected an exception for scenario: ' . $name);
+            } catch (BreezedocException $e) {
+                $message = $e->getMessage();
+                $this->assertStringNotContainsString($password, $message, $name);
+                $this->assertStringNotContainsString($cookie, $message, $name);
+                $this->assertStringNotContainsString($token, $message, $name);
+                $this->assertStringNotContainsString('Very-Secret', $message, $name);
+            }
+        }
     }
 }

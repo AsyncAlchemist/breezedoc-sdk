@@ -7,6 +7,7 @@ namespace Breezedoc\Web;
 use Breezedoc\Exceptions\ApiException;
 use Breezedoc\Exceptions\AuthenticationException;
 use Breezedoc\Exceptions\AuthorizationException;
+use Breezedoc\Exceptions\BreezedocException;
 use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Exceptions\RateLimitException;
 use Psr\Http\Client\ClientExceptionInterface;
@@ -17,8 +18,8 @@ use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
 
 /**
- * An authenticated breezedoc.com website session used to download signed PDFs
- * that the REST API does not expose.
+ * An authenticated breezedoc.com website session used for what the REST API does
+ * not expose: downloading signed PDFs and deleting documents.
  *
  * Performs the Laravel form login over plain HTTP (no browser) using any PSR-18
  * client, caches the resulting session via a {@see SessionStore} so it is reused
@@ -103,6 +104,79 @@ class WebSession
         }
 
         return $this->handleDownloadResponse($response, $id);
+    }
+
+    /**
+     * Delete document $id on the BreezeDoc website (the REST API has no delete).
+     *
+     * Submits the same form as the "Delete" button of the website's documents list
+     * (POST /documents/{id} with `_method=DELETE` and the page's CSRF token). The
+     * result is decided by a follow-up check, not by the answer to the POST: this
+     * returns normally only when a GET of the document's activity page answers 404.
+     *
+     * A dead session is re-logged-in once per call; an expired CSRF token (HTTP 419)
+     * is refreshed once. Exception messages carry the document id and the HTTP status
+     * only, never a credential, cookie or token.
+     *
+     * @throws NotFoundException The document is not there before the delete (already deleted, or not this account's)
+     * @throws AuthenticationException The web login fails (as getPdf)
+     * @throws BreezedocException Any other refusal (403, 419 after one token refresh, 5xx, an unexpected page),
+     *                            and when the document is still there after the delete
+     */
+    public function deleteDocument(int $id): void
+    {
+        $this->ensureSession();
+
+        $reloggedIn = false;
+        $tokenRefreshed = false;
+
+        $token = $this->fetchDeleteToken($id, $reloggedIn);
+
+        // Bounded: each retry spends either the one re-login or the one token refresh.
+        while (true) {
+            $response = $this->postDelete($id, $token);
+
+            if ($this->isLoggedOut($response)) {
+                $this->reLoginOnce($reloggedIn);
+                $token = $this->fetchDeleteToken($id, $reloggedIn);
+                continue;
+            }
+
+            if ($response->getStatusCode() === 419) {
+                if ($tokenRefreshed) {
+                    throw $this->deleteRefusal($id, 419);
+                }
+                $tokenRefreshed = true;
+                $token = $this->fetchDeleteToken($id, $reloggedIn);
+                continue;
+            }
+
+            break;
+        }
+
+        $status = $response->getStatusCode();
+        // A redirect (the Laravel norm), a landed-on page (redirect-following client),
+        // or a 404 (gone in the meantime) all go to the follow-up check.
+        if (!($status >= 200 && $status < 400) && $status !== 404) {
+            throw $this->deleteRefusal($id, $status);
+        }
+
+        $check = $this->requestDocumentPage($id, $reloggedIn);
+        $checkStatus = $check->getStatusCode();
+
+        if ($checkStatus === 404) {
+            $this->persistState();
+            return;
+        }
+
+        if ($checkStatus >= 200 && $checkStatus < 300) {
+            throw new BreezedocException('The website still shows document ' . $id . ' after the delete.');
+        }
+
+        throw new ApiException(
+            'Could not confirm the delete of document ' . $id . ' (HTTP ' . $checkStatus . ').',
+            $checkStatus
+        );
     }
 
     /**
@@ -244,6 +318,139 @@ class WebSession
     }
 
     /**
+     * Check that the document is there and read the CSRF token for its delete form.
+     *
+     * @param bool $reloggedIn Whether this call's one re-login is already spent (updated)
+     * @throws NotFoundException If the document is not there
+     * @throws AuthenticationException If the session cannot be authenticated
+     * @throws ApiException On any other answer, or a page without a token
+     */
+    private function fetchDeleteToken(int $id, bool &$reloggedIn): string
+    {
+        $response = $this->requestDocumentPage($id, $reloggedIn);
+        $status = $response->getStatusCode();
+
+        if ($status === 404) {
+            throw new NotFoundException('Document ' . $id . ' was not found.');
+        }
+
+        if ($status < 200 || $status >= 300) {
+            throw $this->deleteRefusal($id, $status);
+        }
+
+        $token = $this->extractPageToken((string) $response->getBody());
+        if ($token === null) {
+            throw new ApiException(
+                'Could not read a CSRF token from the page of document ' . $id . ' (HTTP ' . $status . ').',
+                $status
+            );
+        }
+
+        return $token;
+    }
+
+    /**
+     * GET the document's activity page. On a dead session, re-login once per
+     * deleteDocument() call and retry.
+     *
+     * @param bool $reloggedIn Whether this call's one re-login is already spent (updated)
+     * @throws AuthenticationException If the session is still dead after the re-login
+     */
+    private function requestDocumentPage(int $id, bool &$reloggedIn): ResponseInterface
+    {
+        $url = $this->baseUrl . '/documents/' . $id . '/activity';
+        $response = $this->get($url, ['Accept' => 'text/html']);
+
+        if (!$this->isLoggedOut($response)) {
+            return $response;
+        }
+
+        $this->reLoginOnce($reloggedIn);
+        $response = $this->get($url, ['Accept' => 'text/html']);
+
+        if ($this->isLoggedOut($response)) {
+            throw new AuthenticationException(
+                'Breezedoc web session could not be authenticated after re-login.'
+            );
+        }
+
+        return $response;
+    }
+
+    /**
+     * @param bool $reloggedIn Whether this call's one re-login is already spent (updated)
+     * @throws AuthenticationException If the re-login is already spent, or the login fails
+     */
+    private function reLoginOnce(bool &$reloggedIn): void
+    {
+        if ($reloggedIn) {
+            throw new AuthenticationException(
+                'Breezedoc web session could not be authenticated after re-login.'
+            );
+        }
+
+        $reloggedIn = true;
+        $this->login();
+    }
+
+    /**
+     * Submit the documents list's delete form for one document, as a browser would.
+     */
+    private function postDelete(int $id, string $token): ResponseInterface
+    {
+        return $this->postForm(
+            $this->baseUrl . '/documents/' . $id,
+            [
+                '_token' => $token,
+                '_method' => 'DELETE',
+            ],
+            [
+                'Accept' => 'text/html',
+                'Origin' => $this->baseUrl,
+                'Referer' => $this->baseUrl . '/documents',
+            ]
+        );
+    }
+
+    /**
+     * Map a refused delete step to an exception. The message holds the document id
+     * and the HTTP status only.
+     */
+    private function deleteRefusal(int $id, int $status): ApiException
+    {
+        $message = 'The Breezedoc website refused the delete of document ' . $id . ' (HTTP ' . $status . ').';
+
+        if ($status === 403) {
+            return new AuthorizationException($message);
+        }
+
+        if ($status === 429) {
+            return new RateLimitException($message);
+        }
+
+        return new ApiException($message, $status);
+    }
+
+    /**
+     * Whether a response shows a dead session on an HTML route: a redirect to the
+     * login page, or (with a redirect-following client) the login form itself.
+     */
+    private function isLoggedOut(ResponseInterface $response): bool
+    {
+        $status = $response->getStatusCode();
+
+        if ($status >= 300 && $status < 400) {
+            return strpos($response->getHeaderLine('Location'), '/login') !== false;
+        }
+
+        if ($status >= 200 && $status < 300) {
+            return $this->looksLikeLoginForm((string) $response->getBody());
+        }
+
+        return false;
+    }
+
+    /**
      * A dead/expired session redirects authenticated routes to /login, or (if the
      * client followed the redirect) returns the login HTML instead of a PDF.
      */
@@ -303,6 +510,26 @@ class WebSession
         }
 
         return null;
+    }
+
+    /**
+     * The CSRF token of an authenticated page: the `csrf-token` meta tag, else a
+     * form's `_token` input.
+     */
+    private function extractPageToken(string $html): ?string
+    {
+        $metaPatterns = [
+            '/<meta\b[^>]*\bname=["\']csrf-token["\'][^>]*\bcontent=["\']([^"\']+)["\']/i',
+            '/<meta\b[^>]*\bcontent=["\']([^"\']+)["\'][^>]*\bname=["\']csrf-token["\']/i',
+        ];
+
+        foreach ($metaPatterns as $pattern) {
+            if (preg_match($pattern, $html, $matches) === 1) {
+                return $matches[1];
+            }
+        }
+
+        return $this->extractToken($html);
     }
 
     private function persistState(): void

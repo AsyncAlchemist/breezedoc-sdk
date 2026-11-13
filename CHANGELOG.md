@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-12
+
+### Added
+
+- `Documents::deleteDocument(int $id): void` and `WebSession::deleteDocument(int $id): void` delete a document. The BreezeDoc REST API has no document delete (`DELETE /api/documents/{id}` answers 405), so this uses the BreezeDoc **website** with the web login from `Configuration::setWebLogin()`, as `downloadPdf()` does. It reads the CSRF token from the document's activity page, submits the form of the site's "Delete" button (`POST /documents/{id}` with `_method=DELETE`), and returns normally only when a follow-up GET of `/documents/{id}/activity` answers 404.
+  - `NotFoundException` when the document is not there before the delete (no POST is sent).
+  - `AuthenticationException` when the web login fails.
+  - `BreezedocException` (an `ApiException` that carries the HTTP status, where there is one) on any other refusal (403, 419 after one token refresh, 5xx, an unexpected page), and when the document is still there after the delete.
+  - A dead session is re-logged-in once per call, and an expired CSRF token (HTTP 419) is refreshed once. Exception messages carry the document id and the HTTP status only.
+
 ## [0.4.0] - 2026-07-24
 
 ### Added

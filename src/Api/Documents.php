@@ -186,6 +186,34 @@ class Documents extends AbstractApi
     }
 
     /**
+     * Delete a document.
+     *
+     * The REST API has no document delete, so this uses the Breezedoc website with
+     * the web credentials configured via
+     * {@see \Breezedoc\Config\Configuration::setWebLogin()}: it submits the form of
+     * the site's "Delete" button, then confirms that the document is gone. It returns
+     * normally only when a follow-up check finds the document no longer there. The
+     * delete cannot be undone.
+     *
+     * @throws \InvalidArgumentException If no web login has been configured
+     * @throws \Breezedoc\Exceptions\NotFoundException If the document is not there before the delete
+     * @throws \Breezedoc\Exceptions\AuthenticationException If login fails
+     * @throws \Breezedoc\Exceptions\BreezedocException On any other refusal, or if the document is
+     *                                                  still there after the delete
+     */
+    public function deleteDocument(int $id): void
+    {
+        if ($this->webSession === null) {
+            throw new \InvalidArgumentException(
+                'Web login credentials are required to delete documents. '
+                . 'Call Configuration::setWebLogin($email, $password).'
+            );
+        }
+
+        $this->webSession->deleteDocument($id);
+    }
+
+    /**
      * Download the signed/completed PDF for a document and save it to a directory.
      *
      * @param int $id Document ID
