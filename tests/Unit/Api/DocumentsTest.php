@@ -6,6 +6,10 @@ namespace Breezedoc\Tests\Unit\Api;
 
 use Breezedoc\Api\Documents;
 use Breezedoc\Config\Configuration;
+use Breezedoc\Exceptions\ApiException;
+use Breezedoc\Exceptions\AuthorizationException;
+use Breezedoc\Exceptions\DeleteNotConfirmedException;
+use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Http\RequestBuilder;
 use Breezedoc\Models\Document;
 use Breezedoc\Models\Recipient;
@@ -16,6 +20,8 @@ use Breezedoc\Web\SessionState;
 use Breezedoc\Web\WebSession;
 use Http\Mock\Client as MockHttpClient;
 use Nyholm\Psr7\Factory\Psr17Factory;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 
 class DocumentsTest extends UnitTestCase
 {
@@ -317,25 +323,138 @@ class DocumentsTest extends UnitTestCase
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('Web login credentials are required to delete documents');
 
-        // $this->documents was built without a WebSession.
-        $this->documents->deleteDocument(123);
+        try {
+            // $this->documents was built without a WebSession.
+            $this->documents->deleteDocument(123);
+        } finally {
+            $this->assertCount(0, $this->httpClient->getRequests());
+        }
     }
 
-    public function testDeleteDocumentDelegatesToWebSession(): void
+    public function testDeleteDocumentThrowsRestNotFoundWithoutAWebCall(): void
     {
+        $webHttp = new MockHttpClient();
+        $documents = $this->documentsWithWebHttp($webHttp, []);
+        $this->httpClient->addResponse($this->createErrorResponse('Not Found', 404));
+
+        try {
+            $documents->deleteDocument(311939);
+            $this->fail('Expected NotFoundException');
+        } catch (NotFoundException $e) {
+            $this->assertSame(['GET /api/documents/311939'], $this->lines($this->httpClient));
+            $this->assertSame([], $this->lines($webHttp));
+        }
+    }
+
+    public function testDeleteDocumentSucceedsWhenRestNoLongerFindsTheDocument(): void
+    {
+        $webHttp = new MockHttpClient();
+        $documents = $this->documentsWithWebHttp($webHttp, $this->webDeleteSuccess());
+        $this->httpClient->addResponse($this->restDocument(311939));
+        $this->httpClient->addResponse($this->createErrorResponse('Not Found', 404));
+
+        $documents->deleteDocument(311939);
+
+        $this->assertSame(
+            ['GET /api/documents/311939', 'GET /api/documents/311939'],
+            $this->lines($this->httpClient)
+        );
+        $this->assertSame(
+            ['GET /documents/311939/activity', 'POST /documents/311939', 'GET /documents/311939/activity'],
+            $this->lines($webHttp)
+        );
+    }
+
+    public function testDeleteDocumentTreatsAWebNotFoundAsASignalWhenRestConfirms(): void
+    {
+        $webHttp = new MockHttpClient();
+        $documents = $this->documentsWithWebHttp($webHttp, [$this->webPage(404, '')]);
+        $this->httpClient->addResponse($this->restDocument(77));
+        $this->httpClient->addResponse($this->createErrorResponse('Not Found', 404));
+
+        $documents->deleteDocument(77);
+
+        $this->assertSame(['GET /documents/77/activity'], $this->lines($webHttp));
+        $this->assertCount(2, $this->httpClient->getRequests());
+    }
+
+    public function testDeleteDocumentThrowsWhenAWebNotFoundMeetsADocumentStillInRest(): void
+    {
+        // E.g. a web login on another account, or a renamed website route.
+        $webHttp = new MockHttpClient();
+        $documents = $this->documentsWithWebHttp($webHttp, [$this->webPage(404, '')]);
+        $this->httpClient->addResponse($this->restDocument(78));
+        $this->httpClient->addResponse($this->restDocument(78));
+
+        $this->expectException(DeleteNotConfirmedException::class);
+        $this->expectExceptionMessage('Document 78 still exists after the website delete.');
+        $documents->deleteDocument(78);
+    }
+
+    public function testDeleteDocumentThrowsWhenRestStillReturnsTheDocumentAfterAWebSuccess(): void
+    {
+        $webHttp = new MockHttpClient();
+        $documents = $this->documentsWithWebHttp($webHttp, $this->webDeleteSuccess());
+        $this->httpClient->addResponse($this->restDocument(79));
+        $this->httpClient->addResponse($this->restDocument(79));
+
+        try {
+            $documents->deleteDocument(79);
+            $this->fail('Expected DeleteNotConfirmedException');
+        } catch (DeleteNotConfirmedException $e) {
+            $this->assertSame('Document 79 still exists after the website delete.', $e->getMessage());
+            $this->assertCount(3, $webHttp->getRequests());
+            $this->assertCount(2, $this->httpClient->getRequests());
+        }
+    }
+
+    public function testDeleteDocumentPropagatesARestErrorAfterTheDelete(): void
+    {
+        $webHttp = new MockHttpClient();
+        $documents = $this->documentsWithWebHttp($webHttp, $this->webDeleteSuccess());
+        $this->httpClient->addResponse($this->restDocument(80));
+        $this->httpClient->addResponse($this->createErrorResponse('Server Error', 500));
+
+        try {
+            $documents->deleteDocument(80);
+            $this->fail('Expected ApiException');
+        } catch (ApiException $e) {
+            $this->assertNotInstanceOf(NotFoundException::class, $e);
+            $this->assertSame(500, $e->getStatusCode());
+        }
+    }
+
+    public function testDeleteDocumentPropagatesAWebRefusalWithoutTheSecondRestCheck(): void
+    {
+        $webHttp = new MockHttpClient();
+        $documents = $this->documentsWithWebHttp($webHttp, [
+            $this->webPage(200, '<meta name="csrf-token" content="tok">'),
+            $this->webPage(403, 'Forbidden'),
+        ]);
+        $this->httpClient->addResponse($this->restDocument(81));
+
+        try {
+            $documents->deleteDocument(81);
+            $this->fail('Expected AuthorizationException');
+        } catch (AuthorizationException $e) {
+            $this->assertCount(1, $this->httpClient->getRequests());
+        }
+    }
+
+    /**
+     * Build a Documents resource with the REST mock of setUp() and a web session on
+     * $webHttp that has a cached (valid) session and serves $webResponses in order.
+     *
+     * @param array<int, ResponseInterface> $webResponses
+     */
+    private function documentsWithWebHttp(MockHttpClient $webHttp, array $webResponses): Documents
+    {
+        foreach ($webResponses as $response) {
+            $webHttp->addResponse($response);
+        }
+
         $store = new ArraySessionStore();
         $store->save(new SessionState('user@example.com', time(), ['breezedoc_session' => 'x']));
-
-        $webHttp = new MockHttpClient();
-        $webHttp->addResponse(
-            $this->psr17Factory->createResponse(200)
-                ->withHeader('Content-Type', 'text/html')
-                ->withBody($this->psr17Factory->createStream('<meta name="csrf-token" content="tok">'))
-        );
-        $webHttp->addResponse(
-            $this->psr17Factory->createResponse(302)->withHeader('Location', 'https://breezedoc.com/documents')
-        );
-        $webHttp->addResponse($this->psr17Factory->createResponse(404));
 
         $webSession = new WebSession(
             $webHttp,
@@ -347,19 +466,48 @@ class DocumentsTest extends UnitTestCase
             3600,
             'https://breezedoc.com'
         );
-        $documents = new Documents($this->httpClient, $this->makeRequestBuilder(), $webSession);
 
-        $documents->deleteDocument(311939);
+        return new Documents($this->httpClient, $this->makeRequestBuilder(), $webSession);
+    }
 
-        $lines = array_map(static function ($request): string {
+    /**
+     * @return array<int, ResponseInterface>
+     */
+    private function webDeleteSuccess(): array
+    {
+        return [
+            $this->webPage(200, '<meta name="csrf-token" content="tok">'),
+            $this->psr17Factory->createResponse(302)->withHeader('Location', 'https://breezedoc.com/documents'),
+            $this->webPage(404, ''),
+        ];
+    }
+
+    private function webPage(int $status, string $html): ResponseInterface
+    {
+        return $this->psr17Factory->createResponse($status)
+            ->withHeader('Content-Type', 'text/html')
+            ->withBody($this->psr17Factory->createStream($html));
+    }
+
+    private function restDocument(int $id): ResponseInterface
+    {
+        return $this->createJsonResponse([
+            'id' => $id,
+            'title' => 'Test Document',
+            'slug' => 'test' . $id,
+            'created_at' => '2025-01-15T10:30:00.000000Z',
+            'updated_at' => '2025-01-15T10:30:00.000000Z',
+        ]);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function lines(MockHttpClient $client): array
+    {
+        return array_map(static function (RequestInterface $request): string {
             return $request->getMethod() . ' ' . $request->getUri()->getPath();
-        }, $webHttp->getRequests());
-        $this->assertSame(
-            ['GET /documents/311939/activity', 'POST /documents/311939', 'GET /documents/311939/activity'],
-            $lines
-        );
-        // The REST API client is not used for the delete.
-        $this->assertCount(0, $this->httpClient->getRequests());
+        }, $client->getRequests());
     }
 
     /**

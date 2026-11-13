@@ -8,6 +8,7 @@ use Breezedoc\Exceptions\ApiException;
 use Breezedoc\Exceptions\AuthenticationException;
 use Breezedoc\Exceptions\AuthorizationException;
 use Breezedoc\Exceptions\BreezedocException;
+use Breezedoc\Exceptions\DeleteNotConfirmedException;
 use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Exceptions\RateLimitException;
 use Psr\Http\Client\ClientExceptionInterface;
@@ -109,19 +110,28 @@ class WebSession
     /**
      * Delete document $id on the BreezeDoc website (the REST API has no delete).
      *
+     * This is the low-level website step. Callers should use
+     * {@see \Breezedoc\Api\Documents::deleteDocument()}, which checks the result
+     * against the REST API: a website 404 alone does not prove a delete (a renamed
+     * route or a web login on another account also gives one).
+     *
      * Submits the same form as the "Delete" button of the website's documents list
      * (POST /documents/{id} with `_method=DELETE` and the page's CSRF token). The
      * result is decided by a follow-up check, not by the answer to the POST: this
      * returns normally only when a GET of the document's activity page answers 404.
      *
      * A dead session is re-logged-in once per call; an expired CSRF token (HTTP 419)
-     * is refreshed once. Exception messages carry the document id and the HTTP status
-     * only, never a credential, cookie or token.
+     * is refreshed once. Exception messages carry the document id, the failed step and
+     * the HTTP status only, never a credential, cookie or token.
      *
-     * @throws NotFoundException The document is not there before the delete (already deleted, or not this account's)
+     * @throws NotFoundException The website answered 404 for the document's activity page
+     *                           when it read the CSRF token (before a delete POST, or before
+     *                           a retry of it). It does not prove that the document is gone.
      * @throws AuthenticationException The web login fails (as getPdf)
-     * @throws BreezedocException Any other refusal (403, 419 after one token refresh, 5xx, an unexpected page),
-     *                            and when the document is still there after the delete
+     * @throws DeleteNotConfirmedException The website still shows the document after the delete
+     * @throws BreezedocException Any other refusal (403, 419 after one token refresh, 5xx, an
+     *                            unexpected page); 403 and 429 as AuthorizationException and
+     *                            RateLimitException at every step
      */
     public function deleteDocument(int $id): void
     {
@@ -144,7 +154,7 @@ class WebSession
 
             if ($response->getStatusCode() === 419) {
                 if ($tokenRefreshed) {
-                    throw $this->deleteRefusal($id, 419);
+                    throw $this->refusal(419, $this->postRefusedMessage($id, 419));
                 }
                 $tokenRefreshed = true;
                 $token = $this->fetchDeleteToken($id, $reloggedIn);
@@ -158,7 +168,7 @@ class WebSession
         // A redirect (the Laravel norm), a landed-on page (redirect-following client),
         // or a 404 (gone in the meantime) all go to the follow-up check.
         if (!($status >= 200 && $status < 400) && $status !== 404) {
-            throw $this->deleteRefusal($id, $status);
+            throw $this->refusal($status, $this->postRefusedMessage($id, $status));
         }
 
         $check = $this->requestDocumentPage($id, $reloggedIn);
@@ -170,12 +180,13 @@ class WebSession
         }
 
         if ($checkStatus >= 200 && $checkStatus < 300) {
-            throw new BreezedocException('The website still shows document ' . $id . ' after the delete.');
+            throw new DeleteNotConfirmedException('The website still shows document ' . $id . ' after the delete.');
         }
 
-        throw new ApiException(
-            'Could not confirm the delete of document ' . $id . ' (HTTP ' . $checkStatus . ').',
-            $checkStatus
+        throw $this->refusal(
+            $checkStatus,
+            'The Breezedoc website answered HTTP ' . $checkStatus . ' for the activity page of document '
+            . $id . ' after the delete.'
         );
     }
 
@@ -335,13 +346,18 @@ class WebSession
         }
 
         if ($status < 200 || $status >= 300) {
-            throw $this->deleteRefusal($id, $status);
+            throw $this->refusal(
+                $status,
+                'The Breezedoc website answered HTTP ' . $status . ' for the activity page of document '
+                . $id . ' before the delete.'
+            );
         }
 
         $token = $this->extractPageToken((string) $response->getBody());
         if ($token === null) {
             throw new ApiException(
-                'Could not read a CSRF token from the page of document ' . $id . ' (HTTP ' . $status . ').',
+                'Could not read a CSRF token from the activity page of document ' . $id
+                . ' before the delete (HTTP ' . $status . ').',
                 $status
             );
         }
@@ -412,14 +428,17 @@ class WebSession
         );
     }
 
-    /**
-     * Map a refused delete step to an exception. The message holds the document id
-     * and the HTTP status only.
-     */
-    private function deleteRefusal(int $id, int $status): ApiException
+    private function postRefusedMessage(int $id, int $status): string
     {
-        $message = 'The Breezedoc website refused the delete of document ' . $id . ' (HTTP ' . $status . ').';
+        return 'The Breezedoc website refused the delete of document ' . $id . ' (HTTP ' . $status . ').';
+    }
 
+    /**
+     * Map a refused delete step to an exception, the same way at every step. The
+     * message holds the document id, the step and the HTTP status only.
+     */
+    private function refusal(int $status, string $message): ApiException
+    {
         if ($status === 403) {
             return new AuthorizationException($message);
         }

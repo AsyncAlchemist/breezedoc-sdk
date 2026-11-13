@@ -9,11 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `Documents::deleteDocument(int $id): void` and `WebSession::deleteDocument(int $id): void` delete a document. The BreezeDoc REST API has no document delete (`DELETE /api/documents/{id}` answers 405), so this uses the BreezeDoc **website** with the web login from `Configuration::setWebLogin()`, as `downloadPdf()` does. It reads the CSRF token from the document's activity page, submits the form of the site's "Delete" button (`POST /documents/{id}` with `_method=DELETE`), and returns normally only when a follow-up GET of `/documents/{id}/activity` answers 404.
-  - `NotFoundException` when the document is not there before the delete (no POST is sent).
-  - `AuthenticationException` when the web login fails.
-  - `BreezedocException` (an `ApiException` that carries the HTTP status, where there is one) on any other refusal (403, 419 after one token refresh, 5xx, an unexpected page), and when the document is still there after the delete.
-  - A dead session is re-logged-in once per call, and an expired CSRF token (HTTP 419) is refreshed once. Exception messages carry the document id and the HTTP status only.
+- `Documents::deleteDocument(int $id): void` deletes a document. The BreezeDoc REST API has no document delete (`DELETE /api/documents/{id}` answers 405), so the delete goes through the BreezeDoc **website** with the web login from `Configuration::setWebLogin()`, as `downloadPdf()` does. The REST API decides the result: `find($id)` before the delete, the website delete, then `find($id)` again.
+  - `NotFoundException` only when the REST API does not find the document before the delete. No website call is made then.
+  - Returns normally when the REST API answers 404 after the website delete. A website 404 is only a signal and is not rethrown.
+  - `DeleteNotConfirmedException` when the document still exists after the delete (the REST API still returns it, or the website still shows it).
+  - `AuthenticationException` when the web login fails. Other website refusals (403, 419 after one token refresh, 5xx, an unexpected page) throw an `ApiException` that carries the HTTP status (`AuthorizationException` for 403 and `RateLimitException` for 429, at every step). Other REST errors propagate.
+- `WebSession::deleteDocument(int $id): void` is the low-level website step. It reads the CSRF token from `/documents/{id}/activity`, submits the form of the site's "Delete" button (`POST /documents/{id}` with `_method=DELETE`), and returns normally only when a follow-up GET of the activity page answers 404. Its `NotFoundException` means only that the website answered 404 for the activity page when it read the token. A dead session is re-logged-in once per call, and an expired CSRF token (HTTP 419) is refreshed once. Exception messages carry the document id, the failed step and the HTTP status only.
+- `Breezedoc\Exceptions\DeleteNotConfirmedException` (extends `BreezedocException`).
 
 ### Changed
 

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Breezedoc\Api;
 
+use Breezedoc\Exceptions\DeleteNotConfirmedException;
+use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Http\RequestBuilder;
 use Breezedoc\Models\Document;
 use Breezedoc\Models\Recipient;
@@ -188,18 +190,25 @@ class Documents extends AbstractApi
     /**
      * Delete a document.
      *
-     * The REST API has no document delete, so this uses the Breezedoc website with
-     * the web credentials configured via
-     * {@see \Breezedoc\Config\Configuration::setWebLogin()}: it submits the form of
-     * the site's "Delete" button, then confirms that the document is gone. It returns
-     * normally only when a follow-up check finds the document no longer there. The
-     * delete cannot be undone.
+     * The REST API has no document delete, so the delete itself goes through the
+     * Breezedoc website with the web credentials configured via
+     * {@see \Breezedoc\Config\Configuration::setWebLogin()}. The REST API, which is
+     * authoritative for the API token's account, decides the result:
+     *
+     * 1. `find($id)`: a REST 404 throws NotFoundException, and no website call is made.
+     * 2. The website delete ({@see WebSession::deleteDocument()}). A website 404 is only
+     *    a signal here; the next step decides.
+     * 3. `find($id)` again: a REST 404 means deleted, and this returns normally. A
+     *    document that is still returned throws DeleteNotConfirmedException.
+     *
+     * The delete cannot be undone.
      *
      * @throws \InvalidArgumentException If no web login has been configured
-     * @throws \Breezedoc\Exceptions\NotFoundException If the document is not there before the delete
-     * @throws \Breezedoc\Exceptions\AuthenticationException If login fails
-     * @throws \Breezedoc\Exceptions\BreezedocException On any other refusal, or if the document is
-     *                                                  still there after the delete
+     * @throws NotFoundException If the REST API does not find the document before the delete
+     *                           (the only NotFoundException; it means the document is not there)
+     * @throws DeleteNotConfirmedException If the document still exists after the delete
+     * @throws \Breezedoc\Exceptions\AuthenticationException If the web login (or the API token) fails
+     * @throws \Breezedoc\Exceptions\BreezedocException On any other website refusal or REST error
      */
     public function deleteDocument(int $id): void
     {
@@ -210,7 +219,21 @@ class Documents extends AbstractApi
             );
         }
 
-        $this->webSession->deleteDocument($id);
+        $this->find($id);
+
+        try {
+            $this->webSession->deleteDocument($id);
+        } catch (NotFoundException $e) {
+            // A website 404 does not prove the delete; the REST check below decides.
+        }
+
+        try {
+            $this->find($id);
+        } catch (NotFoundException $e) {
+            return;
+        }
+
+        throw new DeleteNotConfirmedException('Document ' . $id . ' still exists after the website delete.');
     }
 
     /**

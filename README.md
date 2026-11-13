@@ -158,27 +158,41 @@ dependency is required. It expects a client whose `sendRequest()` does not follo
 
 #### Deleting a document
 
-The REST API has no document delete either. `deleteDocument()` uses the same website login and
-session cache as `downloadPdf()`: it submits the form of the site's "Delete" button, then checks
-that the document is gone. The delete cannot be undone.
+The REST API has no document delete either. Use `Documents::deleteDocument()`. It sends the
+delete through the website, with the same web login and session cache as `downloadPdf()`, and
+uses the REST API (authoritative for your API token's account) to decide the result. The delete
+cannot be undone.
 
 ```php
 use Breezedoc\Exceptions\BreezedocException;
+use Breezedoc\Exceptions\DeleteNotConfirmedException;
 use Breezedoc\Exceptions\NotFoundException;
 
 try {
-    $client->documents()->deleteDocument(123); // returns only when the document is gone
+    $client->documents()->deleteDocument(123); // returns only when the REST API no longer finds it
 } catch (NotFoundException $e) {
-    // The document was not there before the delete (already deleted, or not this account's).
+    // The REST API did not find the document before the delete. No website call was made.
+} catch (DeleteNotConfirmedException $e) {
+    // The delete was sent, but the document still exists.
 } catch (BreezedocException $e) {
-    // Login failed (AuthenticationException), the site refused the delete, or the
-    // document is still there after the delete.
+    // Login failed (AuthenticationException), the site refused a step, or another API error.
 }
 ```
 
-`deleteDocument()` returns normally only when a follow-up GET of the document's activity page
-answers 404. A dead session is re-logged-in once and an expired CSRF token (HTTP 419) is refreshed
-once. Exception messages carry the document id and the HTTP status only.
+`Documents::deleteDocument()` works in three steps:
+
+1. `find($id)` on the REST API. A 404 throws `NotFoundException`, and no website call is made. This
+   is the only `NotFoundException` that means "the document is not there".
+2. The website delete: it reads the CSRF token from the document's activity page, submits the form
+   of the site's "Delete" button, and checks the activity page again. A website 404 is only a
+   signal here: a renamed route or a web login on another account also gives one.
+3. `find($id)` again. A REST 404 means deleted, and the call returns normally. A document that is
+   still returned throws `DeleteNotConfirmedException`. Other REST errors propagate.
+
+On the website, a dead session is re-logged-in once and an expired CSRF token (HTTP 419) is
+refreshed once. Exception messages carry the document id, the failed step and the HTTP status
+only. `WebSession::deleteDocument()` is the low-level website step; do not call it directly to
+delete a document, because its `NotFoundException` only means that the website answered 404.
 
 ### Templates
 
