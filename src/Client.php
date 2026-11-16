@@ -13,13 +13,16 @@ use Breezedoc\Api\Users;
 use Breezedoc\Config\Configuration;
 use Breezedoc\Http\HttpClientFactory;
 use Breezedoc\Http\RequestBuilder;
+use Breezedoc\V1\TeamClient;
 use Breezedoc\Web\WebSession;
 use Psr\Http\Client\ClientInterface;
 
 /**
  * Main Breezedoc API client.
  *
- * This is the primary entry point for interacting with the Breezedoc API.
+ * This is the primary entry point for interacting with the Breezedoc API. Its resources use
+ * the original API (`/api`) with a personal access token. When the configuration also has a
+ * team API key, {@see team()} gives the Team API v1 client.
  */
 class Client
 {
@@ -34,6 +37,7 @@ class Client
     private ?Invoices $invoices = null;
     private ?Teams $teams = null;
     private ?WebSession $webSession = null;
+    private ?TeamClient $team = null;
 
     /**
      * Create a new Breezedoc client.
@@ -152,6 +156,26 @@ class Client
         }
 
         return $this->invoices;
+    }
+
+    /**
+     * Get the Team API v1 client, which uses the team API key of the configuration.
+     *
+     * @throws \InvalidArgumentException If no team API key has been configured
+     */
+    public function team(): TeamClient
+    {
+        if ($this->team === null) {
+            if (!$this->config->hasTeamApiKey()) {
+                throw new \InvalidArgumentException(
+                    'A team API key is required for the Team API v1. Call Configuration::setTeamApiKey($key).'
+                );
+            }
+
+            $this->team = new TeamClient($this->config, $this->httpClient);
+        }
+
+        return $this->team;
     }
 
     /**
