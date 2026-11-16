@@ -11,8 +11,14 @@ use Throwable;
  */
 class AuthenticationException extends ApiException
 {
-    public function __construct(string $message = 'Unauthenticated', ?Throwable $previous = null)
-    {
-        parent::__construct($message, 401, $previous);
+    /**
+     * @param array<string, mixed>|null $responseBody
+     */
+    public function __construct(
+        string $message = 'Unauthenticated',
+        ?Throwable $previous = null,
+        ?array $responseBody = null
+    ) {
+        parent::__construct($message, 401, $previous, $responseBody);
     }
 }

@@ -13,12 +13,16 @@ class RateLimitException extends ApiException
 {
     private ?int $retryAfter;
 
+    /**
+     * @param array<string, mixed>|null $responseBody
+     */
     public function __construct(
         string $message = 'Rate Limit Exceeded',
         ?int $retryAfter = null,
-        ?Throwable $previous = null
+        ?Throwable $previous = null,
+        ?array $responseBody = null
     ) {
-        parent::__construct($message, 429, $previous);
+        parent::__construct($message, 429, $previous, $responseBody);
         $this->retryAfter = $retryAfter;
     }
 

@@ -11,8 +11,14 @@ use Throwable;
  */
 class NotFoundException extends ApiException
 {
-    public function __construct(string $message = 'Not Found', ?Throwable $previous = null)
-    {
-        parent::__construct($message, 404, $previous);
+    /**
+     * @param array<string, mixed>|null $responseBody
+     */
+    public function __construct(
+        string $message = 'Not Found',
+        ?Throwable $previous = null,
+        ?array $responseBody = null
+    ) {
+        parent::__construct($message, 404, $previous, $responseBody);
     }
 }

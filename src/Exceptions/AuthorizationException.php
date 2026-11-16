@@ -11,8 +11,14 @@ use Throwable;
  */
 class AuthorizationException extends ApiException
 {
-    public function __construct(string $message = 'Forbidden', ?Throwable $previous = null)
-    {
-        parent::__construct($message, 403, $previous);
+    /**
+     * @param array<string, mixed>|null $responseBody
+     */
+    public function __construct(
+        string $message = 'Forbidden',
+        ?Throwable $previous = null,
+        ?array $responseBody = null
+    ) {
+        parent::__construct($message, 403, $previous, $responseBody);
     }
 }

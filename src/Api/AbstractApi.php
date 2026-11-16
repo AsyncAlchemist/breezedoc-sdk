@@ -7,6 +7,7 @@ namespace Breezedoc\Api;
 use Breezedoc\Exceptions\ApiException;
 use Breezedoc\Exceptions\AuthenticationException;
 use Breezedoc\Exceptions\AuthorizationException;
+use Breezedoc\Exceptions\ConflictException;
 use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Exceptions\RateLimitException;
 use Breezedoc\Exceptions\ValidationException;
@@ -135,8 +136,27 @@ abstract class AbstractApi
             return $data;
         }
 
-        $message = $data['message'] ?? 'Unknown error';
-        $this->throwException($statusCode, $message, $data, $response);
+        $this->throwException($statusCode, $this->extractErrorMessage($data), $data, $response);
+    }
+
+    /**
+     * Read the error message of the original API (`message`) or of the Team API v1
+     * error envelope (`error.message`).
+     *
+     * @param array<string, mixed> $data
+     */
+    protected function extractErrorMessage(array $data): string
+    {
+        if (isset($data['message']) && is_string($data['message'])) {
+            return $data['message'];
+        }
+
+        $error = $data['error'] ?? null;
+        if (is_array($error) && isset($error['message']) && is_string($error['message'])) {
+            return $error['message'];
+        }
+
+        return 'Unknown error';
     }
 
     /**
@@ -174,23 +194,26 @@ abstract class AbstractApi
     ): void {
         switch ($statusCode) {
             case 401:
-                throw new AuthenticationException($message);
+                throw new AuthenticationException($message, null, $data);
 
             case 403:
-                throw new AuthorizationException($message);
+                throw new AuthorizationException($message, null, $data);
 
             case 404:
-                throw new NotFoundException($message);
+                throw new NotFoundException($message, null, $data);
+
+            case 409:
+                throw new ConflictException($message, null, $data);
 
             case 422:
                 $errors = $data['errors'] ?? [];
-                throw new ValidationException($message, $errors);
+                throw new ValidationException($message, $errors, null, $data);
 
             case 429:
                 $retryAfter = $response->hasHeader('Retry-After')
                     ? (int) $response->getHeaderLine('Retry-After')
                     : null;
-                throw new RateLimitException($message, $retryAfter);
+                throw new RateLimitException($message, $retryAfter, null, $data);
 
             default:
                 throw new ApiException($message, $statusCode, null, $data);
