@@ -12,6 +12,7 @@ use DateTimeImmutable;
 class Invoice extends AbstractModel
 {
     public const STATUS_DRAFT = 'draft';
+    public const STATUS_OPEN = 'open';
     public const STATUS_PAID = 'paid';
     public const STATUS_UNCOLLECTIBLE = 'uncollectible';
     public const STATUS_VOID = 'void';
@@ -95,6 +96,11 @@ class Invoice extends AbstractModel
         return $this->status === self::STATUS_DRAFT;
     }
 
+    public function isOpen(): bool
+    {
+        return $this->status === self::STATUS_OPEN;
+    }
+
     public function isPaid(): bool
     {
         return $this->status === self::STATUS_PAID;
@@ -176,5 +182,128 @@ class Invoice extends AbstractModel
     public function getItems(): array
     {
         return $this->items;
+    }
+
+    /**
+     * The invoice title shown to the customer (default "Invoice"), or null.
+     */
+    public function getTitle(): ?string
+    {
+        return $this->stringField('title');
+    }
+
+    /**
+     * The optional invoice reference number, or null.
+     */
+    public function getInvoiceNumber(): ?string
+    {
+        return $this->stringField('invoice_number');
+    }
+
+    /**
+     * The invoice date (YYYY-MM-DD, read-only), or null.
+     */
+    public function getInvoiceDate(): ?string
+    {
+        return $this->stringField('invoice_date');
+    }
+
+    /**
+     * The payment terms label: due_on_receipt, net_15, net_30, net_60, net_90 or custom, or null.
+     */
+    public function getPaymentTerms(): ?string
+    {
+        return $this->stringField('payment_terms');
+    }
+
+    /**
+     * The subtotal of all line items before the discount, in decimal, or null.
+     */
+    public function getSubtotal(): ?float
+    {
+        return $this->floatField('subtotal');
+    }
+
+    public function getLocalizedSubtotal(): ?string
+    {
+        return $this->stringField('localized_subtotal');
+    }
+
+    /**
+     * The discount type: "percentage" or "flat", or null.
+     */
+    public function getDiscountType(): ?string
+    {
+        return $this->stringField('discount_type');
+    }
+
+    /**
+     * The percentage discount (0-100) when the discount type is "percentage", or null.
+     */
+    public function getDiscountPercentage(): ?float
+    {
+        return $this->floatField('discount_percentage');
+    }
+
+    /**
+     * The flat discount in cents when the discount type is "flat", or null.
+     */
+    public function getDiscountAmountCents(): ?int
+    {
+        $value = $this->rawData['discount_amount_cents'] ?? null;
+
+        return is_int($value) || (is_string($value) && is_numeric($value)) ? (int) $value : null;
+    }
+
+    public function getDiscountLabel(): ?string
+    {
+        return $this->stringField('discount_label');
+    }
+
+    /**
+     * The discount applied, in decimal (clamped to the subtotal), or null.
+     */
+    public function getDiscount(): ?float
+    {
+        return $this->floatField('discount');
+    }
+
+    public function getLocalizedDiscount(): ?string
+    {
+        return $this->stringField('localized_discount');
+    }
+
+    /**
+     * The assigned category (`slug` and `name`), or null.
+     *
+     * @return array{slug: ?string, name: ?string}|null
+     */
+    public function getCategory(): ?array
+    {
+        $category = $this->rawData['category'] ?? null;
+        if (!is_array($category)) {
+            return null;
+        }
+
+        return [
+            'slug' => isset($category['slug']) && is_string($category['slug']) ? $category['slug'] : null,
+            'name' => isset($category['name']) && is_string($category['name']) ? $category['name'] : null,
+        ];
+    }
+
+    private function stringField(string $key): ?string
+    {
+        $value = $this->rawData[$key] ?? null;
+
+        return is_string($value) ? $value : null;
+    }
+
+    private function floatField(string $key): ?float
+    {
+        $value = $this->rawData[$key] ?? null;
+
+        return is_int($value) || is_float($value) || (is_string($value) && is_numeric($value))
+            ? (float) $value
+            : null;
     }
 }
