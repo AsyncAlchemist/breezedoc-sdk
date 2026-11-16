@@ -52,7 +52,7 @@ $client = Breezedoc::client('your-api-token');
 // Advanced: use Configuration for custom settings
 $config = new Configuration('your-api-token');
 $config->setTimeout(60)       // Request timeout in seconds
-       ->setMaxRetries(5);    // Max retries on rate limit
+       ->setMaxRetries(5);    // Reserved: the client does not retry a 429 yet
 
 $client = Breezedoc::client($config);
 ```
@@ -65,6 +65,10 @@ preview ([developer docs](https://breezedoc.com/developers),
 **team API key** (`bd_live_...`) and works with the documents and templates of one team. It
 adds PDF upload, reminders, cancelling, a signed-PDF download link, audit events, idempotency
 keys and webhooks.
+
+> **Preview.** BreezeDoc does not publish the field names of the v1 JSON responses yet. Some
+> getters read the most likely names; `toArray()` and `get()` always give the raw response. This
+> part of the SDK has not been run against the live API yet.
 
 | | Original API | Team API v1 |
 |---|---|---|
@@ -620,14 +624,9 @@ The original API allows 60 requests per minute per account; creating documents i
 each team can create 100 documents a day and send 20 an hour across all its keys. A 429
 response carries `Retry-After`.
 
-The SDK includes built-in rate limit handling with automatic retry.
-
-You can configure the maximum number of retries:
-
-```php
-$config = new Configuration('your-token');
-$config->setMaxRetries(5); // Default is 3
-```
+The SDK does not retry a 429 by itself yet: it throws a `RateLimitException`, and
+`$e->getRetryAfter()` gives the seconds to wait. `Configuration::setMaxRetries()` exists, but the
+client does not use it yet (see the issue tracker).
 
 ## Bring Your Own HTTP Client
 
