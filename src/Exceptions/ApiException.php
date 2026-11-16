@@ -8,6 +8,9 @@ use Throwable;
 
 /**
  * Exception for API errors.
+ *
+ * The original API answers errors as `{"message": "..."}`. The Team API v1 answers them
+ * as `{"error": {"code": "...", "message": "..."}}`; {@see getErrorCode()} returns that code.
  */
 class ApiException extends BreezedocException
 {
@@ -45,5 +48,19 @@ class ApiException extends BreezedocException
     public function getResponseBody(): ?array
     {
         return $this->responseBody;
+    }
+
+    /**
+     * Get the machine-readable error code of a Team API v1 error envelope
+     * (`error.code`), or null when the response has none.
+     */
+    public function getErrorCode(): ?string
+    {
+        $error = $this->responseBody['error'] ?? null;
+        if (!is_array($error) || !isset($error['code']) || !is_string($error['code'])) {
+            return null;
+        }
+
+        return $error['code'];
     }
 }

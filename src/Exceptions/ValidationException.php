@@ -18,13 +18,15 @@ class ValidationException extends ApiException
 
     /**
      * @param array<string, array<string>> $errors Field validation errors
+     * @param array<string, mixed>|null $responseBody
      */
     public function __construct(
         string $message = 'Validation Error',
         array $errors = [],
-        ?Throwable $previous = null
+        ?Throwable $previous = null,
+        ?array $responseBody = null
     ) {
-        parent::__construct($message, 422, $previous);
+        parent::__construct($message, 422, $previous, $responseBody);
         $this->errors = $errors;
     }
 
