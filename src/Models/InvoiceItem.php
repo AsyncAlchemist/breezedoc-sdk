@@ -15,6 +15,7 @@ class InvoiceItem extends AbstractModel
     private string $description;
     private ?string $details;
     private int $quantity;
+    private float $quantityDecimal;
     private int $unitPrice;
     private int $totalPrice;
     private ?string $localizedUnitPrice;
@@ -32,6 +33,7 @@ class InvoiceItem extends AbstractModel
         $item->description = (string) $data['description'];
         $item->details = $data['details'] ?? null;
         $item->quantity = (int) $data['quantity'];
+        $item->quantityDecimal = (float) $data['quantity'];
         $item->unitPrice = (int) $data['unit_price'];
         $item->totalPrice = (int) $data['total_price'];
         $item->localizedUnitPrice = $data['localized_unit_price'] ?? null;
@@ -55,9 +57,33 @@ class InvoiceItem extends AbstractModel
         return $this->details;
     }
 
+    /**
+     * The quantity as an integer.
+     *
+     * The API now allows fractional quantities (minimum 0.01); this getter truncates them.
+     * Use {@see getQuantityDecimal()} for the exact value.
+     */
     public function getQuantity(): int
     {
         return $this->quantity;
+    }
+
+    /**
+     * The exact quantity, which can be fractional (for example 1.5).
+     */
+    public function getQuantityDecimal(): float
+    {
+        return $this->quantityDecimal;
+    }
+
+    /**
+     * The quantity formatted for display, with trailing zeros trimmed, or null.
+     */
+    public function getFormattedQuantity(): ?string
+    {
+        $value = $this->rawData['formatted_quantity'] ?? null;
+
+        return is_string($value) ? $value : null;
     }
 
     /**

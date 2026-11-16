@@ -20,7 +20,9 @@ class Invoices extends AbstractApi
      * List invoices.
      *
      * @param array<string, mixed> $params Query parameters:
-     *   - status: Filter by status (draft, paid, uncollectible, void)
+     *   - status: Filter by status (the spec lists draft, sent, paid, uncollectible, void)
+     *   - order_by: Sort field (id, created_at, payment_due)
+     *   - direction: Sort direction (asc, desc)
      *   - page: Page number
      * @return PaginatedResult<Invoice>
      */
@@ -49,11 +51,19 @@ class Invoices extends AbstractApi
      *   - description: Invoice description (required)
      *   - payment_due: Due date YYYY-MM-DD (required)
      *   - footer_note: Footer note (optional)
+     *   - title: Invoice title, max 50 chars (optional, default "Invoice")
+     *   - invoice_number: Reference number, max 20 chars of [a-zA-Z0-9-_] (optional)
+     *   - payment_terms: due_on_receipt, net_15, net_30, net_60, net_90 or custom (optional;
+     *     still send the calculated payment_due)
      *   - items: Array of line items (required, min 1):
      *     - description: Item description (required)
      *     - details: Item details (optional)
-     *     - quantity: Quantity (required, min 1)
+     *     - quantity: Quantity (required, min 0.01; fractions allowed)
      *     - unit_price: Unit price in cents (required)
+     *   - discount_type: percentage or flat (optional)
+     *   - discount_percentage: 0-100, required with discount_type percentage
+     *   - discount_amount_cents: required with discount_type flat (max: the subtotal)
+     *   - discount_label: max 50 chars (optional)
      *   - payment_platform_ids: Array of payment platform UUIDs (optional)
      *   - send: Send immediately if true (optional)
      */
