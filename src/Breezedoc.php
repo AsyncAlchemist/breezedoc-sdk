@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Breezedoc;
 
 use Breezedoc\Config\Configuration;
+use Breezedoc\V1\TeamClient;
 use Composer\InstalledVersions;
 use Psr\Http\Client\ClientInterface;
 
@@ -23,6 +24,9 @@ use Psr\Http\Client\ClientInterface;
  *
  *     // Bring your own HTTP client
  *     $client = Breezedoc::client('your-api-token', $guzzleClient);
+ *
+ *     // Team API v1 with a team API key
+ *     $team = Breezedoc::teamClient('bd_live_...');
  */
 class Breezedoc
 {
@@ -35,6 +39,18 @@ class Breezedoc
     public static function client($config, ?ClientInterface $httpClient = null): Client
     {
         return new Client($config, $httpClient);
+    }
+
+    /**
+     * Create a new client for the Team API v1.
+     *
+     * @param string|Configuration $config Team API key (`bd_live_...`), or a Configuration
+     *                                     with a team API key
+     * @param ClientInterface|null $httpClient Optional PSR-18 HTTP client
+     */
+    public static function teamClient($config, ?ClientInterface $httpClient = null): TeamClient
+    {
+        return new TeamClient($config, $httpClient);
     }
 
     /**

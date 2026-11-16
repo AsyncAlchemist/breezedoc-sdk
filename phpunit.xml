@@ -24,5 +24,6 @@
     <php>
         <env name="BREEZEDOC_API_TOKEN" value=""/>
         <env name="BREEZEDOC_TEST_EMAIL" value=""/>
+        <env name="BREEZEDOC_TEAM_API_KEY" value=""/>
     </php>
 </phpunit>

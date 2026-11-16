@@ -10,11 +10,24 @@ use InvalidArgumentException;
 
 /**
  * SDK configuration settings.
+ *
+ * BreezeDoc has two REST APIs with two kinds of credential:
+ *
+ * - The original API at `https://breezedoc.com/api` takes a personal access token (or an
+ *   OAuth access token). This is the `$token` of the constructor.
+ * - The Team API v1 at `https://breezedoc.com/api/v1` takes a team API key (`bd_live_...`).
+ *   Set it with {@see setTeamApiKey()}, or create the configuration with
+ *   {@see forTeamApiKey()}.
+ *
+ * BreezeDoc documents that team keys work only with `/api/v1`, and personal access tokens
+ * only with `/api`.
  */
 class Configuration
 {
     private string $token;
     private string $baseUrl = 'https://breezedoc.com/api';
+    private ?string $teamApiKey = null;
+    private string $teamBaseUrl = 'https://breezedoc.com/api/v1';
     private int $timeout = 30;
     private int $maxRetries = 3;
 
@@ -33,6 +46,20 @@ class Configuration
         $this->token = $token;
     }
 
+    /**
+     * Create a configuration for the Team API v1 only.
+     *
+     * The key is also stored as the constructor token, because the constructor requires one.
+     * Calls to the original API (`/api`) with a team key answer 401.
+     */
+    public static function forTeamApiKey(string $teamApiKey): self
+    {
+        $config = new self($teamApiKey);
+        $config->setTeamApiKey($teamApiKey);
+
+        return $config;
+    }
+
     public function getToken(): string
     {
         return $this->token;
@@ -49,6 +76,45 @@ class Configuration
     public function setBaseUrl(string $baseUrl): self
     {
         $this->baseUrl = $baseUrl;
+        return $this;
+    }
+
+    /**
+     * Set the team API key (`bd_live_...`) for the Team API v1.
+     *
+     * @return $this
+     */
+    public function setTeamApiKey(string $teamApiKey): self
+    {
+        if ($teamApiKey === '') {
+            throw new InvalidArgumentException('Team API key cannot be empty');
+        }
+
+        $this->teamApiKey = $teamApiKey;
+        return $this;
+    }
+
+    public function getTeamApiKey(): ?string
+    {
+        return $this->teamApiKey;
+    }
+
+    public function hasTeamApiKey(): bool
+    {
+        return $this->teamApiKey !== null;
+    }
+
+    public function getTeamBaseUrl(): string
+    {
+        return $this->teamBaseUrl;
+    }
+
+    /**
+     * @return $this
+     */
+    public function setTeamBaseUrl(string $teamBaseUrl): self
+    {
+        $this->teamBaseUrl = $teamBaseUrl;
         return $this;
     }
 
