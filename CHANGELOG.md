@@ -7,13 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.0] - 2026-11-16
 
-Not yet tagged or published. The owner releases it.
-
 BreezeDoc added a second REST API in October 2026, the Team API v1 (developer preview), with
 team API keys, webhooks and an MCP server ([developer docs](https://breezedoc.com/developers),
 [OpenAPI spec](https://breezedoc.com/developer/openapi.yaml)). This release adds the Team API v1
 and webhook verification. All changes are backward compatible: existing methods keep their
 signatures and behavior, apart from the 409 exception class below (a subclass of the old one).
+
+**Preview status.** The Team API v1 is a BreezeDoc developer preview, and BreezeDoc does not yet
+publish the field names of its JSON responses. Some v1 model getters read the most likely field
+names; every v1 model keeps the raw response in `toArray()` and `get()`. This release was not
+run against the live API. Please report a getter that returns null for data you can see in
+`toArray()`. The webhook verifier follows BreezeDoc's published signature scheme and reference
+code exactly.
+
+### Fixed
+
+- The README no longer claims automatic retry on HTTP 429: the client throws
+  `RateLimitException` (with `getRetryAfter()`), and `setMaxRetries()` is not used yet.
 
 ### Added
 
