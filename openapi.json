@@ -16,6 +16,11 @@
   ],
   "components": {
     "securitySchemes": {
+      "teamApiKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Team-owned bd_live_ key. Requires HTTPS; 60 requests per minute per key."
+      },
       "oauth2": {
         "type": "oauth2",
         "flows": {
@@ -122,6 +127,17 @@
           },
           "slug": {
             "type": "string"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "redirect_url": {
+            "type": "string",
+            "format": "uri",
+            "nullable": true,
+            "description": "URL the signer is redirected to after completing the document"
           }
         }
       },
@@ -236,13 +252,14 @@
           },
           "currency": {
             "type": "string",
-            "description": "Three-letter ISO currency code (lowercase)",
-            "example": "usd"
+            "description": "Three-letter ISO currency code (uppercase)",
+            "example": "USD"
           },
           "status": {
             "type": "string",
             "enum": [
               "draft",
+              "open",
               "paid",
               "uncollectible",
               "void"
@@ -250,6 +267,16 @@
           },
           "description": {
             "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "description": "Invoice title displayed to the customer",
+            "example": "Invoice"
+          },
+          "invoice_number": {
+            "type": "string",
+            "nullable": true,
+            "description": "Optional invoice reference number"
           },
           "customer_name": {
             "type": "string",
@@ -259,18 +286,78 @@
             "type": "string",
             "format": "email"
           },
+          "invoice_date": {
+            "type": "string",
+            "format": "date",
+            "nullable": true,
+            "readOnly": true
+          },
           "payment_due": {
             "type": "string",
             "format": "date",
+            "nullable": true
+          },
+          "payment_terms": {
+            "type": "string",
+            "enum": [
+              "due_on_receipt",
+              "net_15",
+              "net_30",
+              "net_60",
+              "net_90",
+              "custom"
+            ],
             "nullable": true
           },
           "footer_note": {
             "type": "string",
             "nullable": true
           },
+          "subtotal": {
+            "type": "number",
+            "description": "Subtotal of all line items in decimal, before discount (e.g., 150.00)"
+          },
+          "localized_subtotal": {
+            "type": "string",
+            "description": "Formatted subtotal with currency symbol (e.g., \"$150.00\")",
+            "nullable": true
+          },
+          "discount_type": {
+            "type": "string",
+            "enum": [
+              "percentage",
+              "flat"
+            ],
+            "nullable": true,
+            "description": "Discount type. `percentage` uses discount_percentage; `flat` uses discount_amount_cents."
+          },
+          "discount_percentage": {
+            "type": "number",
+            "nullable": true,
+            "description": "Percentage discount (0-100), present when discount_type is `percentage`"
+          },
+          "discount_amount_cents": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Flat discount in cents, present when discount_type is `flat`"
+          },
+          "discount_label": {
+            "type": "string",
+            "nullable": true,
+            "description": "Optional label shown for the discount"
+          },
+          "discount": {
+            "type": "number",
+            "description": "Resolved discount applied, in decimal (clamped to the subtotal)"
+          },
+          "localized_discount": {
+            "type": "string",
+            "description": "Formatted discount with currency symbol",
+            "nullable": true
+          },
           "total": {
             "type": "number",
-            "description": "Total amount in decimal (e.g., 150.00)"
+            "description": "Total amount in decimal after discount (subtotal minus discount, floored at 0)"
           },
           "localized_total": {
             "type": "string",
@@ -281,6 +368,19 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "category": {
+            "type": "object",
+            "nullable": true,
+            "description": "Assigned category, when present",
+            "properties": {
+              "slug": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
           },
           "created_at": {
             "type": "string",
@@ -325,6 +425,10 @@
           "quantity": {
             "type": "number"
           },
+          "formatted_quantity": {
+            "type": "string",
+            "description": "Quantity formatted for display, with trailing zeros trimmed"
+          },
           "unit_price": {
             "type": "integer",
             "description": "Unit price in cents (e.g., 10000 = $100.00)"
@@ -348,7 +452,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "description": "Payment platform UUID. Online payment buttons currently use Stripe or PayPal IDs."
           },
           "name": {
             "type": "string",
@@ -1150,6 +1255,7 @@
               "type": "string",
               "enum": [
                 "draft",
+                "sent",
                 "paid",
                 "uncollectible",
                 "void"
@@ -1222,16 +1328,42 @@
                   },
                   "currency": {
                     "type": "string",
-                    "description": "Three-letter ISO currency code (lowercase)",
-                    "example": "usd"
+                    "description": "Three-letter ISO currency code (uppercase)",
+                    "example": "USD"
                   },
                   "description": {
                     "type": "string",
                     "maxLength": 191
                   },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 50,
+                    "nullable": true,
+                    "description": "Optional invoice title. Omitted or null values use the default title, \"Invoice\"."
+                  },
+                  "invoice_number": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "nullable": true,
+                    "pattern": "^[a-zA-Z0-9\\-_]*$",
+                    "description": "Optional invoice reference number."
+                  },
                   "payment_due": {
                     "type": "string",
                     "format": "date"
+                  },
+                  "payment_terms": {
+                    "type": "string",
+                    "enum": [
+                      "due_on_receipt",
+                      "net_15",
+                      "net_30",
+                      "net_60",
+                      "net_90",
+                      "custom"
+                    ],
+                    "nullable": true,
+                    "description": "Optional payment due term label. Clients should still provide the calculated payment_due date."
                   },
                   "footer_note": {
                     "type": "string",
@@ -1260,7 +1392,7 @@
                         },
                         "quantity": {
                           "type": "number",
-                          "minimum": 1
+                          "minimum": 0.01
                         },
                         "unit_price": {
                           "type": "integer",
@@ -1270,13 +1402,41 @@
                       }
                     }
                   },
+                  "discount_type": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "flat"
+                    ],
+                    "nullable": true,
+                    "description": "Discount type. Use `percentage` with discount_percentage, or `flat` with discount_amount_cents."
+                  },
+                  "discount_percentage": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "nullable": true,
+                    "description": "Required when discount_type is `percentage`. Up to 2 decimal places."
+                  },
+                  "discount_amount_cents": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "nullable": true,
+                    "description": "Required when discount_type is `flat`. Must not exceed the invoice subtotal."
+                  },
+                  "discount_label": {
+                    "type": "string",
+                    "maxLength": 50,
+                    "nullable": true,
+                    "description": "Optional label shown for the discount."
+                  },
                   "payment_platform_ids": {
                     "type": "array",
                     "items": {
                       "type": "string",
                       "format": "uuid"
                     },
-                    "description": "Array of payment platform UUIDs to enable for this invoice"
+                    "description": "Array of payment platform UUIDs to enable for this invoice. Online payment buttons currently use Stripe (`0ce25e9d-949b-4a89-8aef-36bdc07b1ec5`) or PayPal (`61059a6c-f124-4948-8616-0ae581fad7ea`).\n"
                   },
                   "send": {
                     "type": "boolean",
@@ -1288,9 +1448,15 @@
               "example": {
                 "customer_email": "client@example.com",
                 "customer_name": "Client Name",
-                "currency": "usd",
+                "currency": "USD",
                 "description": "Consulting Services",
+                "title": "Invoice",
+                "invoice_number": "INV-1001",
                 "payment_due": "2026-02-01",
+                "payment_terms": "net_30",
+                "discount_type": "percentage",
+                "discount_percentage": 10,
+                "discount_label": "Launch discount",
                 "items": [
                   {
                     "description": "Week of January 12th, 2026",
@@ -1380,7 +1546,7 @@
       "put": {
         "operationId": "updateInvoice",
         "summary": "Update an invoice",
-        "description": "Updates an existing invoice. Cannot update invoices with status: paid, uncollectible, or void.\nWhen updating items, the entire items array is replaced.\n",
+        "description": "Updates an existing invoice. Cannot update invoices with status: paid, uncollectible, or void.\nWhen updating items, the entire items array is replaced.\nOnce a payment has been recorded against the invoice the totals are frozen: `items` and the\n`discount_*` fields are ignored and the request still returns 200 with the stored values.\n",
         "tags": [
           "Invoices"
         ],
@@ -1414,15 +1580,40 @@
                   },
                   "currency": {
                     "type": "string",
-                    "description": "Three-letter ISO currency code (lowercase)"
+                    "description": "Three-letter ISO currency code (uppercase)"
                   },
                   "description": {
                     "type": "string",
                     "maxLength": 191
                   },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 50,
+                    "description": "Optional invoice title."
+                  },
+                  "invoice_number": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "nullable": true,
+                    "pattern": "^[a-zA-Z0-9\\-_]*$",
+                    "description": "Optional invoice reference number. Send null to clear it."
+                  },
                   "payment_due": {
                     "type": "string",
                     "format": "date"
+                  },
+                  "payment_terms": {
+                    "type": "string",
+                    "enum": [
+                      "due_on_receipt",
+                      "net_15",
+                      "net_30",
+                      "net_60",
+                      "net_90",
+                      "custom"
+                    ],
+                    "nullable": true,
+                    "description": "Optional payment due term label. Send null to clear it."
                   },
                   "footer_note": {
                     "type": "string",
@@ -1432,7 +1623,7 @@
                   "items": {
                     "type": "array",
                     "minItems": 1,
-                    "description": "Replaces all existing line items",
+                    "description": "Replaces all existing line items. Ignored once a payment has been recorded against the invoice, so the subtotal cannot move. The response returns the stored line items, which is how a client can confirm whether the write applied.\n",
                     "items": {
                       "type": "object",
                       "required": [
@@ -1452,7 +1643,7 @@
                         },
                         "quantity": {
                           "type": "number",
-                          "minimum": 1
+                          "minimum": 0.01
                         },
                         "unit_price": {
                           "type": "integer",
@@ -1462,13 +1653,41 @@
                       }
                     }
                   },
+                  "discount_type": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "flat"
+                    ],
+                    "nullable": true,
+                    "description": "Discount type. Use `percentage` with discount_percentage, or `flat` with discount_amount_cents. Send null to clear an existing discount. Ignored, along with the other `discount_*` fields, once a payment has been recorded against the invoice.\n"
+                  },
+                  "discount_percentage": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "nullable": true,
+                    "description": "Required when discount_type is `percentage`. Up to 2 decimal places."
+                  },
+                  "discount_amount_cents": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "nullable": true,
+                    "description": "Required when discount_type is `flat`. Must not exceed the invoice subtotal."
+                  },
+                  "discount_label": {
+                    "type": "string",
+                    "maxLength": 50,
+                    "nullable": true,
+                    "description": "Optional label shown for the discount."
+                  },
                   "payment_platform_ids": {
                     "type": "array",
                     "items": {
                       "type": "string",
                       "format": "uuid"
                     },
-                    "description": "Array of payment platform UUIDs to enable for this invoice"
+                    "description": "Array of payment platform UUIDs to enable for this invoice. Online payment buttons currently use Stripe (`0ce25e9d-949b-4a89-8aef-36bdc07b1ec5`) or PayPal (`61059a6c-f124-4948-8616-0ae581fad7ea`).\n"
                   }
                 }
               }
@@ -1508,7 +1727,7 @@
       "patch": {
         "operationId": "patchInvoice",
         "summary": "Partially update an invoice",
-        "description": "Same as PUT - updates an existing invoice. Cannot update invoices with status paid, uncollectible, or void.",
+        "description": "Same as PUT - updates an existing invoice. Cannot update invoices with status paid, uncollectible, or void.\nOnce a payment has been recorded against the invoice the totals are frozen: `items` and the\n`discount_*` fields are ignored and the request still returns 200 with the stored values.\n",
         "tags": [
           "Invoices"
         ],
@@ -1541,15 +1760,41 @@
                     "nullable": true
                   },
                   "currency": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Three-letter ISO currency code (uppercase)"
                   },
                   "description": {
                     "type": "string",
                     "maxLength": 191
                   },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 50,
+                    "description": "Optional invoice title."
+                  },
+                  "invoice_number": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "nullable": true,
+                    "pattern": "^[a-zA-Z0-9\\-_]*$",
+                    "description": "Optional invoice reference number. Send null to clear it."
+                  },
                   "payment_due": {
                     "type": "string",
                     "format": "date"
+                  },
+                  "payment_terms": {
+                    "type": "string",
+                    "enum": [
+                      "due_on_receipt",
+                      "net_15",
+                      "net_30",
+                      "net_60",
+                      "net_90",
+                      "custom"
+                    ],
+                    "nullable": true,
+                    "description": "Optional payment due term label. Send null to clear it."
                   },
                   "footer_note": {
                     "type": "string",
@@ -1559,6 +1804,7 @@
                   "items": {
                     "type": "array",
                     "minItems": 1,
+                    "description": "Replaces all existing line items. Ignored once a payment has been recorded against the invoice, so the subtotal cannot move. The response returns the stored line items, which is how a client can confirm whether the write applied.\n",
                     "items": {
                       "type": "object",
                       "required": [
@@ -1578,21 +1824,51 @@
                         },
                         "quantity": {
                           "type": "number",
-                          "minimum": 1
+                          "minimum": 0.01
                         },
                         "unit_price": {
                           "type": "integer",
-                          "minimum": 0
+                          "minimum": 0,
+                          "description": "Price in cents (e.g., 10000 = $100.00)"
                         }
                       }
                     }
+                  },
+                  "discount_type": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "flat"
+                    ],
+                    "nullable": true,
+                    "description": "Discount type. Use `percentage` with discount_percentage, or `flat` with discount_amount_cents. Send null to clear an existing discount. Ignored, along with the other `discount_*` fields, once a payment has been recorded against the invoice.\n"
+                  },
+                  "discount_percentage": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "nullable": true,
+                    "description": "Required when discount_type is `percentage`. Up to 2 decimal places."
+                  },
+                  "discount_amount_cents": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "nullable": true,
+                    "description": "Required when discount_type is `flat`. Must not exceed the invoice subtotal."
+                  },
+                  "discount_label": {
+                    "type": "string",
+                    "maxLength": 50,
+                    "nullable": true,
+                    "description": "Optional label shown for the discount."
                   },
                   "payment_platform_ids": {
                     "type": "array",
                     "items": {
                       "type": "string",
                       "format": "uuid"
-                    }
+                    },
+                    "description": "Array of payment platform UUIDs to enable for this invoice. Online payment buttons currently use Stripe (`0ce25e9d-949b-4a89-8aef-36bdc07b1ec5`) or PayPal (`61059a6c-f124-4948-8616-0ae581fad7ea`).\n"
                   }
                 }
               }
@@ -1725,6 +2001,3376 @@
           },
           "422": {
             "description": "Cannot send an invoice with its current status"
+          }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "summary": "Team, owner plan and team usage",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires read scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only. List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/templates": {
+      "get": {
+        "summary": "List team templates",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires read scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only. List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/templates/{id}": {
+      "get": {
+        "summary": "Template metadata, numbered parties and field definitions",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires read scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only. List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/documents": {
+      "get": {
+        "summary": "List team documents",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires read scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only, with review_url, a link to review the draft in BreezeDoc (null unless it is an unsent document). List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "sent",
+                "completed",
+                "cancelled",
+                "expired"
+              ]
+            }
+          },
+          {
+            "name": "created_after",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ]
+      },
+      "post": {
+        "summary": "Create a draft from a template, uploaded PDF or html",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC. Pass exactly one of template_id, pdf or html. html is an agreement’s wording, using only h1, h2, h3, p, ul, ol, li, strong, em, u and br with no attributes, up to 200,000 characters; anything else is refused. BreezeDoc adds a signature page with signature, name and date fields for one or two recipients, parties 1 and 2, so fields can’t be passed with it.",
+        "responses": {
+          "201": {
+            "description": "Success; JSON metadata only, with review_url, a link to review the draft in BreezeDoc (null unless it is an unsent document). List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "description": "Replay the first response for 24 hours. Reuse with a different payload returns 409."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "recipients"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 191
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "party",
+                        "name",
+                        "email"
+                      ],
+                      "properties": {
+                        "party": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 191
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        }
+                      }
+                    }
+                  },
+                  "template_id": {
+                    "type": "string",
+                    "example": "tpl_123"
+                  },
+                  "html": {
+                    "type": "string",
+                    "maxLength": 200000,
+                    "description": "The agreement’s wording. See the description above for what it can contain."
+                  }
+                },
+                "oneOf": [
+                  {
+                    "required": [
+                      "template_id"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "html"
+                    ]
+                  }
+                ]
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "pdf",
+                  "recipients",
+                  "fields"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 191
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "party",
+                        "name",
+                        "email"
+                      ],
+                      "properties": {
+                        "party": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 191
+                        },
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        }
+                      }
+                    }
+                  },
+                  "pdf": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Real PDF, 25 MB maximum, 100 pages maximum."
+                  },
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "party",
+                        "page",
+                        "type",
+                        "properties"
+                      ],
+                      "properties": {
+                        "party": {
+                          "type": "integer"
+                        },
+                        "page": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "signature",
+                            "initials",
+                            "text",
+                            "email",
+                            "date",
+                            "checkbox",
+                            "dropdown"
+                          ]
+                        },
+                        "properties": {
+                          "type": "object",
+                          "description": "x, y, w and h are page fractions; optional options array for dropdowns."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{id}": {
+      "get": {
+        "summary": "Document and recipient status",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires read scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only, with review_url, a link to review the draft in BreezeDoc (null unless it is an unsent document). List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/documents/{id}/send": {
+      "post": {
+        "summary": "Send a draft through existing phishing protection",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only, with review_url, a link to review the draft in BreezeDoc (null unless it is an unsent document). List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "description": "Replay the first response for 24 hours. Reuse with a different payload returns 409."
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "signing_order": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "message": {
+                    "type": "string",
+                    "description": "Requires custom-email plan feature."
+                  },
+                  "expires_in_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 365,
+                    "default": 30
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/documents/{id}/remind": {
+      "post": {
+        "summary": "Remind invited unsigned recipients, once per 24 hours",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only, with review_url, a link to review the draft in BreezeDoc (null unless it is an unsent document). List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "description": "Replay the first response for 24 hours. Reuse with a different payload returns 409."
+          }
+        ]
+      }
+    },
+    "/v1/documents/{id}/cancel": {
+      "post": {
+        "summary": "Cancel a sent document and prevent further signing",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only, with review_url, a link to review the draft in BreezeDoc (null unless it is an unsent document). List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            },
+            "description": "Replay the first response for 24 hours. Reuse with a different payload returns 409."
+          }
+        ]
+      }
+    },
+    "/v1/documents/{id}/download": {
+      "get": {
+        "summary": "Get a 15-minute signed URL for the completed PDF and certificate",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires read scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only. List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/documents/{id}/events": {
+      "get": {
+        "summary": "Cursor-paginated document audit events",
+        "tags": [
+          "Team API v1"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires read scope. Resources outside the key’s team return 404. IDs use doc_, tpl_, rcp_ and evt_ prefixes. Timestamps are ISO 8601 UTC.",
+        "responses": {
+          "200": {
+            "description": "Success; JSON metadata only. List responses contain data and next_cursor."
+          },
+          "400": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "API error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/webhooks": {
+      "get": {
+        "summary": "List webhook endpoints",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. HTTPS destinations on port 443; public DNS only. Delivery is asynchronous and signed with HMAC-SHA256. POST supports Idempotency-Key.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "202": {
+            "description": "Queued"
+          },
+          "404": {
+            "description": "Endpoint or delivery not found in this team"
+          },
+          "422": {
+            "description": "Invalid destination or event selection"
+          }
+        },
+        "parameters": []
+      },
+      "post": {
+        "summary": "Create endpoint; secret returned once",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. HTTPS destinations on port 443; public DNS only. Delivery is asynchronous and signed with HMAC-SHA256. POST supports Idempotency-Key.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "202": {
+            "description": "Queued"
+          },
+          "404": {
+            "description": "Endpoint or delivery not found in this team"
+          },
+          "422": {
+            "description": "Invalid destination or event selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "url",
+                  "events"
+                ],
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "document.sent",
+                        "recipient.viewed",
+                        "recipient.signed",
+                        "document.completed",
+                        "document.cancelled",
+                        "document.expired"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/webhooks/{id}": {
+      "delete": {
+        "summary": "Remove webhook endpoint",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. HTTPS destinations on port 443; public DNS only. Delivery is asynchronous and signed with HMAC-SHA256. POST supports Idempotency-Key.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "202": {
+            "description": "Queued"
+          },
+          "404": {
+            "description": "Endpoint or delivery not found in this team"
+          },
+          "422": {
+            "description": "Invalid destination or event selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/webhooks/{id}/test": {
+      "post": {
+        "summary": "Queue a test event",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. HTTPS destinations on port 443; public DNS only. Delivery is asynchronous and signed with HMAC-SHA256. POST supports Idempotency-Key.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "202": {
+            "description": "Queued"
+          },
+          "404": {
+            "description": "Endpoint or delivery not found in this team"
+          },
+          "422": {
+            "description": "Invalid destination or event selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ]
+      }
+    },
+    "/v1/webhooks/{id}/rotate": {
+      "post": {
+        "summary": "Rotate signing secret with 24-hour overlap",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. HTTPS destinations on port 443; public DNS only. Delivery is asynchronous and signed with HMAC-SHA256. POST supports Idempotency-Key.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "202": {
+            "description": "Queued"
+          },
+          "404": {
+            "description": "Endpoint or delivery not found in this team"
+          },
+          "422": {
+            "description": "Invalid destination or event selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ]
+      }
+    },
+    "/v1/webhooks/{id}/deliveries": {
+      "get": {
+        "summary": "List delivery logs retained for 30 days",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. HTTPS destinations on port 443; public DNS only. Delivery is asynchronous and signed with HMAC-SHA256. POST supports Idempotency-Key.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "202": {
+            "description": "Queued"
+          },
+          "404": {
+            "description": "Endpoint or delivery not found in this team"
+          },
+          "422": {
+            "description": "Invalid destination or event selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/webhooks/{id}/deliveries/{delivery}/redeliver": {
+      "post": {
+        "summary": "Queue redelivery with the original event ID",
+        "tags": [
+          "Webhooks"
+        ],
+        "security": [
+          {
+            "teamApiKey": []
+          }
+        ],
+        "description": "Requires write scope. HTTPS destinations on port 443; public DNS only. Delivery is asynchronous and signed with HMAC-SHA256. POST supports Idempotency-Key.",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "202": {
+            "description": "Queued"
+          },
+          "404": {
+            "description": "Endpoint or delivery not found in this team"
+          },
+          "422": {
+            "description": "Invalid destination or event selection"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "delivery",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ]
+      }
+    },
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "summary": "OAuth authorization server metadata",
+        "tags": [
+          "MCP OAuth"
+        ],
+        "servers": [
+          {
+            "url": "/"
+          }
+        ],
+        "security": [],
+        "description": "See /developers for OAuth setup. Authorization code flow requires exact redirect URIs and PKCE S256. Access tokens last one hour; rotating refresh tokens last 30 days. MCP requires a Bearer access token and uses JSON-RPC.",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required or invalid token"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/.well-known/oauth-protected-resource/mcp": {
+      "get": {
+        "summary": "MCP protected resource metadata",
+        "tags": [
+          "MCP OAuth"
+        ],
+        "servers": [
+          {
+            "url": "/"
+          }
+        ],
+        "security": [],
+        "description": "See /developers for OAuth setup. Authorization code flow requires exact redirect URIs and PKCE S256. Access tokens last one hour; rotating refresh tokens last 30 days. MCP requires a Bearer access token and uses JSON-RPC.",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required or invalid token"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/mcp/oauth/register": {
+      "post": {
+        "summary": "Register a public OAuth client",
+        "tags": [
+          "MCP OAuth"
+        ],
+        "servers": [
+          {
+            "url": "/"
+          }
+        ],
+        "security": [],
+        "description": "See /developers for OAuth setup. Authorization code flow requires exact redirect URIs and PKCE S256. Access tokens last one hour; rotating refresh tokens last 30 days. MCP requires a Bearer access token and uses JSON-RPC.",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required or invalid token"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/mcp/oauth/authorize": {
+      "get": {
+        "summary": "Approve team access with PKCE S256",
+        "tags": [
+          "MCP OAuth"
+        ],
+        "servers": [
+          {
+            "url": "/"
+          }
+        ],
+        "security": [],
+        "description": "See /developers for OAuth setup. Authorization code flow requires exact redirect URIs and PKCE S256. Access tokens last one hour; rotating refresh tokens last 30 days. MCP requires a Bearer access token and uses JSON-RPC.",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required or invalid token"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/mcp/oauth/token": {
+      "post": {
+        "summary": "Exchange authorization code or rotate refresh token",
+        "tags": [
+          "MCP OAuth"
+        ],
+        "servers": [
+          {
+            "url": "/"
+          }
+        ],
+        "security": [],
+        "description": "See /developers for OAuth setup. Authorization code flow requires exact redirect URIs and PKCE S256. Access tokens last one hour; rotating refresh tokens last 30 days. MCP requires a Bearer access token and uses JSON-RPC.",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required or invalid token"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "post": {
+        "summary": "Streamable HTTP MCP document tools",
+        "tags": [
+          "MCP OAuth"
+        ],
+        "servers": [
+          {
+            "url": "/"
+          }
+        ],
+        "security": [],
+        "description": "See /developers for OAuth setup. Authorization code flow requires exact redirect URIs and PKCE S256. Access tokens last one hour; rotating refresh tokens last 30 days. MCP requires a Bearer access token and uses JSON-RPC.",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Authentication required or invalid token"
+          },
+          "429": {
+            "description": "Rate limited"
           }
         }
       }

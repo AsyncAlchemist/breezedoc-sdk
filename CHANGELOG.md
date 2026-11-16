@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-16
+
+Not yet tagged or published. The owner releases it.
+
+BreezeDoc added a second REST API in October 2026, the Team API v1 (developer preview), with
+team API keys, webhooks and an MCP server ([developer docs](https://breezedoc.com/developers),
+[OpenAPI spec](https://breezedoc.com/developer/openapi.yaml)). This release adds the Team API v1
+and webhook verification. All changes are backward compatible: existing methods keep their
+signatures and behavior, apart from the 409 exception class below (a subclass of the old one).
+
+### Added
+
+- **Team API v1 client** (`Breezedoc\V1`), for `https://breezedoc.com/api/v1` with a team API
+  key (`bd_live_...`). BreezeDoc documents that team keys work only with `/api/v1` and personal
+  access tokens only with `/api`.
+  - `Breezedoc::teamClient($key)` and `Client::team()` return a `TeamClient` with `me()`,
+    `templates()`, `documents()` and `webhooks()`.
+  - `Configuration::setTeamApiKey()`, `getTeamApiKey()`, `hasTeamApiKey()`,
+    `forTeamApiKey()`, `getTeamBaseUrl()`, `setTeamBaseUrl()`. `RequestBuilder::forTeamApi()`,
+    `isTeamApi()` and `createStream()`.
+  - Documents: `list()` / `all()` (cursor pagination: `limit`, `cursor`, `status`,
+    `created_after`), `find()`, `create()`, `createFromTemplate()`, `createFromHtml()`,
+    `createFromPdf()` (multipart upload), `send()`, `remind()`, `cancel()`, `events()` /
+    `allEvents()`, `getDownloadLink()`, `downloadPdf()` and `downloadPdfTo()`.
+  - **Signed-PDF download through the API** for team documents: `downloadPdf()` gets the
+    15-minute signed URL and fetches it without the API key. Exception messages never contain
+    the URL.
+  - Templates: `list()` / `all()` and `find()`.
+  - Webhook endpoint management: `list()`, `create()` (returns the `whsec_` secret once),
+    `destroy()`, `test()`, `rotateSecret()`, `deliveries()` and `redeliver()`.
+  - Every POST method takes an optional `Idempotency-Key`.
+  - Models `TeamDocument`, `TeamRecipient`, `TeamTemplate`, `TeamAccount`, `DocumentEvent`,
+    `DownloadLink`, `WebhookEndpoint`, `WebhookDelivery`, the `DocumentStatus` constants and
+    `CursorPage`. The published spec has no response schemas for the Team API v1, so the models
+    read their fields leniently and keep the raw response (`toArray()`, `get()`). See
+    `docs/api-spec-issues.md`.
+- **Webhook verification**: `Breezedoc\Webhooks\WebhookVerifier` checks the
+  `BreezeDoc-Signature` header (HMAC-SHA256 of `"<t>." + raw body`, five-minute tolerance, any
+  matching `v1` signature, `hash_equals()`), and `constructEvent()` /
+  `constructEventFromRequest()` return a typed `WebhookEvent`. Also `WebhookEventType`,
+  `WebhookRecipient` and `WebhookVerifier::generateSignatureHeader()` for tests.
+- `ConflictException` (HTTP 409) and `WebhookVerificationException`.
+- `ApiException::getErrorCode()` returns the `error.code` of a Team API v1 error. The typed
+  exceptions now keep the decoded response body (new optional trailing constructor argument).
+- Invoice fields from the current spec: `Invoice::getTitle()`, `getInvoiceNumber()`,
+  `getInvoiceDate()`, `getPaymentTerms()`, `getSubtotal()`, `getLocalizedSubtotal()`,
+  `getDiscountType()`, `getDiscountPercentage()`, `getDiscountAmountCents()`,
+  `getDiscountLabel()`, `getDiscount()`, `getLocalizedDiscount()`, `getCategory()`,
+  `isOpen()` and `STATUS_OPEN`; `InvoiceItem::getQuantityDecimal()` and
+  `getFormattedQuantity()` (quantities can now be fractional).
+- A read-only `TeamApiIntegrationTest`, skipped unless `BREEZEDOC_TEAM_API_KEY` is set.
+
+### Changed
+
+- HTTP 409 responses now throw `ConflictException` (a subclass of `ApiException`) instead of a
+  plain `ApiException`.
+- Error messages are also read from the Team API v1 envelope `{"error": {"message"}}`.
+- `openapi.json` is now a JSON copy of BreezeDoc's published spec of 2026-11-16 (the original
+  API, the Team API v1, webhooks and the MCP OAuth endpoints).
+
+### Notes
+
+- Neither API has a document delete; the Team API v1 can only cancel a sent document.
+  `Documents::deleteDocument()` (website) stays the only delete.
+- `Documents::downloadPdf(int)` (website) stays for documents of a personal account. The Team
+  API v1 sees only team documents, and BreezeDoc does not document how an integer document ID
+  maps to a `doc_` ID.
+- BreezeDoc's MCP server (`https://breezedoc.com/mcp`) uses OAuth for AI clients; the SDK only
+  points to it in the README.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added

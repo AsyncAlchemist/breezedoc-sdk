@@ -39,6 +39,8 @@ foreach ($documents as $document) {
 ## Authentication
 
 Generate a Personal Access Token at [https://breezedoc.com/integrations/api](https://breezedoc.com/integrations/api).
+It works with the original API at `https://breezedoc.com/api`. For the newer Team API v1, use a
+team API key: see [Team API v1](#team-api-v1-team-api-keys).
 
 ```php
 use Breezedoc\Breezedoc;
@@ -54,6 +56,266 @@ $config->setTimeout(60)       // Request timeout in seconds
 
 $client = Breezedoc::client($config);
 ```
+
+## Team API v1 (team API keys)
+
+In October 2026 BreezeDoc added a second REST API, the **Team API v1**, as a developer
+preview ([developer docs](https://breezedoc.com/developers),
+[help article](https://help.breezedoc.com/article/1023-api-access-for-developers)). It uses a
+**team API key** (`bd_live_...`) and works with the documents and templates of one team. It
+adds PDF upload, reminders, cancelling, a signed-PDF download link, audit events, idempotency
+keys and webhooks.
+
+| | Original API | Team API v1 |
+|---|---|---|
+| Base URL | `https://breezedoc.com/api` | `https://breezedoc.com/api/v1` |
+| Credential | Personal access token (or OAuth token) | Team API key `bd_live_...` with read, or read and write, scope |
+| Plans | Every plan | Agency or Pro (a team is needed; only the team owner creates keys) |
+| Documents | Your own account | The key's team only (other IDs answer 404) |
+| IDs | Integers | Strings with `doc_`, `tpl_`, `rcp_`, `evt_` prefixes |
+| Lists | Page numbers | Cursor: `data`, `next_cursor`, `limit` 1 to 100 |
+| Errors | `{"message": "..."}` | `{"error": {"code": "...", "message": "..."}}` |
+| Signed PDF | Website login (`Documents::downloadPdf()`) | `GET /documents/{id}/download` (15-minute link) |
+| Delete | Website login (`Documents::deleteDocument()`) | No delete; `cancel` stops signing |
+| Webhooks | No | Yes |
+
+BreezeDoc documents that team keys work only with `/api/v1`, and personal access tokens only
+with `/api`. Create a team key in Settings → Integrations → Manage API Keys → Team API keys.
+The key is shown once.
+
+```php
+use Breezedoc\Breezedoc;
+use Breezedoc\Config\Configuration;
+
+// Team API v1 only:
+$team = Breezedoc::teamClient('bd_live_...');
+
+// Or one client for both APIs (and the website features):
+$config = new Configuration('your-personal-access-token');
+$config->setTeamApiKey('bd_live_...');
+$client = Breezedoc::client($config);
+$team = $client->team();
+```
+
+### Send a document from a template
+
+```php
+// Read the template's numbered parties, then give exactly one recipient per party.
+$template = $team->templates()->find('tpl_123');
+$parties = $template->getParties();
+
+// Creating a draft never sends email. The last argument is an Idempotency-Key.
+$draft = $team->documents()->createFromTemplate('tpl_123', [
+    ['party' => 1, 'name' => 'Jordan', 'email' => 'jordan@example.com'],
+], 'NDA', 'nda-jordan-001');
+
+echo $draft->getReviewUrl(); // review the unsent draft in BreezeDoc
+
+// Send it. Options: signing_order (bool), message (custom-email plan), expires_in_days (1-365).
+$team->documents()->send($draft->getId(), ['expires_in_days' => 30], 'nda-jordan-send-001');
+
+// Later:
+$document = $team->documents()->find($draft->getId());
+$document->getStatus();      // draft, sent, completed, cancelled or expired
+$document->isCompleted();
+$team->documents()->remind($draft->getId());   // once per 24 hours
+$team->documents()->cancel($draft->getId());   // nobody can sign it after this
+```
+
+Other ways to create a draft:
+
+```php
+// From an agreement's wording: only h1, h2, h3, p, ul, ol, li, strong, em, u and br, no
+// attributes. BreezeDoc adds a signature page for parties 1 and 2.
+$team->documents()->createFromHtml('<h1>Agreement</h1><p>...</p>', $recipients, 'Agreement');
+
+// From a PDF (at most 25 MB and 100 pages). Field coordinates are page fractions (0 to 1).
+$team->documents()->createFromPdf(file_get_contents('contract.pdf'), $recipients, [
+    ['party' => 1, 'page' => 2, 'type' => 'signature',
+     'properties' => ['x' => 0.1, 'y' => 0.8, 'w' => 0.25, 'h' => 0.05]],
+], 'Contract');
+```
+
+> **Note on PDF upload.** BreezeDoc's spec does not say how the `recipients` and `fields`
+> arrays are encoded in the multipart body. The SDK sends them in the bracket form that PHP
+> and Laravel parse into arrays (`recipients[0][email]`, `fields[0][properties][x]`). This has
+> not been checked against the live API yet.
+
+### Download the signed PDF
+
+```php
+// Gets a fresh 15-minute signed URL and fetches it (without your API key).
+$pdf = $team->documents()->downloadPdf('doc_456');
+$path = $team->documents()->downloadPdfTo('doc_456', '/secure/path'); // doc_456.pdf
+
+// Or just the link. BreezeDoc says to treat it as a credential: do not log it.
+$link = $team->documents()->getDownloadLink('doc_456');
+$url = $link->getUrl();
+```
+
+The PDF includes the signing audit certificate. Wait for the `document.completed` webhook (or
+the `completed` status) before you download it.
+
+### Lists, cursors and audit events
+
+```php
+use Breezedoc\V1\Models\DocumentStatus;
+
+$page = $team->documents()->list([
+    'status' => DocumentStatus::COMPLETED,
+    'created_after' => new DateTimeImmutable('-7 days'), // sent as ISO 8601 UTC
+    'limit' => 100,
+]);
+foreach ($page as $document) { /* ... */ }
+$next = $page->getNextCursor(); // pass as 'cursor' for the next page; null on the last page
+
+// Or walk every page:
+foreach ($team->documents()->all(['status' => DocumentStatus::SENT]) as $document) { /* ... */ }
+
+foreach ($team->documents()->allEvents('doc_456') as $event) {
+    echo $event->getType(), ' ', $event->getCreatedAt()->format(DATE_ATOM), "\n";
+}
+
+$account = $team->me(); // the key's team, the owner's plan and the team usage
+```
+
+### Idempotency keys and errors
+
+Every POST method takes an optional `Idempotency-Key` as its last argument. BreezeDoc replays
+the first response for 24 hours, so a retry with the same key never creates or sends twice. A
+key reused with a different payload answers 409, which throws `ConflictException`. 409 is
+also the answer to a state conflict, for example a download of a document that is not
+completed.
+
+```php
+use Breezedoc\Exceptions\ApiException;
+use Breezedoc\Exceptions\ConflictException;
+
+try {
+    $team->documents()->send('doc_456', [], 'send-doc_456');
+} catch (ConflictException $e) {
+    echo $e->getErrorCode(); // the error.code of the Team API v1 envelope
+} catch (ApiException $e) {
+    echo $e->getStatusCode(), ' ', $e->getErrorCode(), ' ', $e->getMessage();
+}
+```
+
+403 "This key needs the write scope" means a read-only key tried to create, send, remind,
+cancel or manage webhooks.
+
+### Response fields
+
+The published OpenAPI spec has no response schemas for the Team API v1. It says only that
+responses are "JSON metadata only", that IDs carry the prefixes above, that timestamps are ISO
+8601 UTC, and that document responses include `review_url`. The SDK's models (`TeamDocument`,
+`TeamTemplate`, `TeamRecipient`, `TeamAccount`, `DocumentEvent`, `DownloadLink`,
+`WebhookEndpoint`, `WebhookDelivery`) therefore read their fields leniently: a missing field
+gives `null` (or an empty array). `toArray()` and `get('field')` always give the full response.
+
+## Webhooks
+
+Webhooks tell your server when something happens to a **team** document. Documents under a
+personal account outside the team send no webhooks. Webhooks need a team (Agency or Pro plan),
+and a team can have up to ten endpoints. An endpoint must be a public HTTPS URL on port 443.
+
+| Event | Meaning |
+|---|---|
+| `document.sent` | The document has been sent. |
+| `recipient.viewed` | A recipient opened the document. |
+| `recipient.signed` | A recipient finished signing. |
+| `document.completed` | All recipients signed and the completed PDF is stored. |
+| `document.cancelled` | The document was cancelled through the API or an AI assistant. |
+| `document.expired` | An incomplete document expired. |
+| `webhook.test` | A test delivery that you requested. |
+
+The constants are in `Breezedoc\Webhooks\WebhookEventType`.
+
+### Create an endpoint
+
+Add it on the Webhooks page beside the team's API keys, or with the API (write scope):
+
+```php
+use Breezedoc\Webhooks\WebhookEventType;
+
+$endpoint = $team->webhooks()->create('https://example.com/breezedoc/webhook', [
+    WebhookEventType::RECIPIENT_SIGNED,
+    WebhookEventType::DOCUMENT_COMPLETED,
+]);
+$secret = $endpoint->getSecret(); // whsec_..., shown once: store it now
+
+$team->webhooks()->list();
+$team->webhooks()->test($endpoint->getId());          // queues a webhook.test event
+$team->webhooks()->rotateSecret($endpoint->getId());  // old secret still valid for 24 hours
+$team->webhooks()->deliveries($endpoint->getId());    // logs, kept for 30 days
+$team->webhooks()->redeliver($endpoint->getId(), 'delivery-id'); // same event ID
+$team->webhooks()->destroy($endpoint->getId());
+```
+
+To change the URL or the events, remove the endpoint and create it again.
+
+### Verify and handle a delivery
+
+Every delivery has a `BreezeDoc-Signature` header with a timestamp and an HMAC-SHA256
+signature. Verify it against the **raw request body**, before any JSON parsing:
+
+```php
+use Breezedoc\Exceptions\WebhookVerificationException;
+use Breezedoc\Webhooks\WebhookVerifier;
+
+$verifier = new WebhookVerifier(getenv('BREEZEDOC_WEBHOOK_SECRET'));
+
+$payload = file_get_contents('php://input');
+$signature = $_SERVER['HTTP_BREEZEDOC_SIGNATURE'] ?? '';
+
+try {
+    $event = $verifier->constructEvent($payload, $signature);
+} catch (WebhookVerificationException $e) {
+    http_response_code(400);
+    exit;
+}
+
+// Deliveries can repeat or arrive out of order: skip event IDs you have already stored.
+if (!alreadyHandled($event->getId())) {
+    storeOrQueue($event); // then answer 2xx
+}
+
+if ($event->isDocumentCompleted()) {
+    $pdf = $team->documents()->downloadPdf($event->getDocumentId());
+}
+http_response_code(200);
+```
+
+With a PSR-7 request, use `$verifier->constructEventFromRequest($request)`. The event gives
+`getId()`, `getType()`, `getCreatedAt()`, `getDocumentId()`, `getDocumentStatus()` and, for
+`recipient.*` events, `getRecipient()` (ID and email). Payloads never contain the document text
+or field values; read the current status from the API when the order matters.
+
+How the verifier checks a request, as BreezeDoc documents it:
+
+- The header has exactly one `t=<unix seconds>` part and one or more `v1=<64 hex>` parts.
+- Each `v1` value is `hex(HMAC-SHA256(secret, "<t>." + raw body))`. The secret is used as
+  given, `whsec_` prefix included.
+- A timestamp more than 300 seconds from now is rejected (`new WebhookVerifier($secret, $seconds)`
+  changes the tolerance).
+- After a secret rotation, BreezeDoc sends a signature for each secret for 24 hours. Any match
+  is enough. You can also pass several secrets: `new WebhookVerifier([$new, $old])`.
+- Signatures are compared with `hash_equals()`.
+
+`WebhookVerifier::generateSignatureHeader($secret, $payload)` builds a valid header for your
+own tests.
+
+BreezeDoc retries a failed delivery (any status other than 2xx) after 1 minute, 5 minutes,
+30 minutes, 2 hours, 6 hours, 12 hours and 24 hours. It does not follow redirects. After three
+days of continuous failure it disables the endpoint and emails the team owner.
+
+## AI assistants (MCP)
+
+BreezeDoc also runs an MCP server at `https://breezedoc.com/mcp` for ChatGPT, Claude and Cursor
+([setup guide](https://help.breezedoc.com/article/1122-how-to-connect-breezedoc-to-chatgpt-claude-or-cursor)).
+It uses OAuth (a team owner signs in and approves read or write access), not an API key, so it
+is not part of this SDK. Its tools are `get_account`, `list_templates`, `get_template`,
+`create_document`, `list_documents`, `get_document_status`, `send_document`, `send_reminder`,
+`cancel_document` and `get_download_link`. Sending, reminding and cancelling ask for approval.
 
 ## API Resources
 
@@ -113,10 +375,16 @@ $paths = $client->documents()->downloadPageImagesTo(123, '/path/to/output', 'con
 
 #### Downloading the signed PDF
 
-The BreezeDoc REST API does not expose document PDFs — only per-page JPEG images (above).
+The original REST API does not expose document PDFs — only per-page JPEG images (above).
 To get the actual signed/completed PDF (with signatures and the audit certificate), the SDK
 can log into the BreezeDoc **website** with your web credentials and fetch the file the site's
 "Download" button serves.
+
+> **Team documents:** the Team API v1 now has a signed-PDF download, with no website login.
+> Use `$team->documents()->downloadPdf('doc_...')` for documents in a team (see
+> [Download the signed PDF](#download-the-signed-pdf)). The method below stays for documents of
+> a personal account, which the Team API v1 cannot see. BreezeDoc does not document how an
+> integer document ID of the original API maps to a `doc_` ID.
 
 ```php
 use Breezedoc\Breezedoc;
@@ -158,7 +426,9 @@ dependency is required. It expects a client whose `sendRequest()` does not follo
 
 #### Deleting a document
 
-The REST API has no document delete either. Use `Documents::deleteDocument()`. It sends the
+Neither REST API has a document delete. The Team API v1 can only cancel a sent document
+(`$team->documents()->cancel()`), which stops signing but keeps the document. Use
+`Documents::deleteDocument()`. It sends the
 delete through the website, with the same web login and session cache as `downloadPdf()`, and
 uses the REST API (authoritative for your API token's account) to decide the result. The delete
 cannot be undone.
@@ -256,6 +526,11 @@ $client->invoices()->destroy(123);
 $invoice = $client->invoices()->send(123);
 ```
 
+Invoices also accept and return `title`, `invoice_number`, `payment_terms` and a discount
+(`discount_type` `percentage` or `flat`, with `discount_percentage` or `discount_amount_cents`,
+and `discount_label`). Item quantities can be fractional (minimum 0.01): use
+`InvoiceItem::getQuantityDecimal()`, because `getQuantity()` returns an integer.
+
 ### Teams (Agency Plan)
 
 ```php
@@ -266,7 +541,9 @@ $documents = $client->teams()->documents($teamId);
 $templates = $client->teams()->templates($teamId);
 ```
 
-**Note:** Teams endpoints require an Agency plan subscription.
+**Note:** Teams endpoints require an Agency plan subscription. They are part of the original
+API (personal access token, integer team ID). For the Team API v1 with a team API key, see
+[Team API v1](#team-api-v1-team-api-keys).
 
 ## Pagination
 
@@ -299,6 +576,7 @@ The SDK throws typed exceptions for different error scenarios:
 ```php
 use Breezedoc\Exceptions\AuthenticationException;
 use Breezedoc\Exceptions\AuthorizationException;
+use Breezedoc\Exceptions\ConflictException;
 use Breezedoc\Exceptions\NotFoundException;
 use Breezedoc\Exceptions\ValidationException;
 use Breezedoc\Exceptions\RateLimitException;
@@ -315,6 +593,9 @@ try {
 } catch (NotFoundException $e) {
     // 404 - Resource not found
     echo "Not found: " . $e->getMessage();
+} catch (ConflictException $e) {
+    // 409 - State or Idempotency-Key conflict (Team API v1)
+    echo "Conflict: " . $e->getMessage();
 } catch (ValidationException $e) {
     // 422 - Validation errors
     echo "Validation failed: " . $e->getMessage();
@@ -330,9 +611,16 @@ try {
 }
 ```
 
+Team API v1 errors also carry a machine-readable code: `$e->getErrorCode()`.
+
 ## Rate Limiting
 
-The Breezedoc API allows 60 requests per minute. The SDK includes built-in rate limit handling with automatic retry.
+The original API allows 60 requests per minute per account; creating documents is capped at
+100 a day and sending at 20 an hour. The Team API v1 allows 60 requests per minute per key, and
+each team can create 100 documents a day and send 20 an hour across all its keys. A 429
+response carries `Retry-After`.
+
+The SDK includes built-in rate limit handling with automatic retry.
 
 You can configure the maximum number of retries:
 
@@ -469,9 +757,9 @@ $field->getRecipient();      // The full Recipient object
 
 ## Important Limitations
 
-### No File Upload via API
+### No File Upload via the Original API
 
-The Breezedoc API does **not** support PDF file upload. Documents can only be:
+The original API does **not** support PDF file upload. Documents can only be:
 1. Created with metadata (title, recipients) - results in an empty document shell
 2. Created from existing templates
 
@@ -480,12 +768,15 @@ The Breezedoc API does **not** support PDF file upload. Documents can only be:
 2. Use the SDK to create documents from those templates
 3. Send documents for signing via the SDK
 
+The Team API v1 accepts PDF uploads and html: see
+[Team API v1](#team-api-v1-team-api-keys).
+
 ### No Document Deletion via the REST API
 
-Documents cannot be deleted via the REST API (`DELETE /api/documents/{id}` answers 405). Only
-invoices (in draft status) can be deleted there. To delete a document, use
-`Documents::deleteDocument()`, which goes through the website (see
-[Deleting a document](#deleting-a-document)).
+Documents cannot be deleted via the original REST API (`DELETE /api/documents/{id}` answers
+405), and the Team API v1 has no delete either (only cancel). Only invoices (in draft status)
+can be deleted. To delete a document, use `Documents::deleteDocument()`, which goes through the
+website (see [Deleting a document](#deleting-a-document)).
 
 ## Testing
 
@@ -498,6 +789,8 @@ export BREEZEDOC_API_TOKEN="your-token"
 # Optional: also exercise the signed-PDF download flow
 export BREEZEDOC_WEB_EMAIL="you@example.com"
 export BREEZEDOC_WEB_PASSWORD="your-website-password"
+# Optional: read-only Team API v1 checks
+export BREEZEDOC_TEAM_API_KEY="bd_live_..."
 composer test:integration
 
 # Run all tests
